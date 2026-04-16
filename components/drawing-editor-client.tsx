@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { authedFetch } from '@/lib/authed-fetch'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { ISSUE_TYPES, type Contractor, type Drawing, type Issue } from '@/lib/domain'
 import { toast } from 'sonner'
 
@@ -54,6 +55,7 @@ export default function DrawingEditorClient() {
   const [pageIndex, setPageIndex] = useState(0)
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 })
   const [pdfError, setPdfError] = useState<string | null>(null)
+  const [pdfUrl, setPdfUrl] = useState('')
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
   const [saveAndContinue, setSaveAndContinue] = useState(false)
@@ -126,10 +128,45 @@ export default function DrawingEditorClient() {
   }, [])
 
   useEffect(() => {
-    if (currentDrawing?.signed_url) {
-      console.log('pdf loading start')
+    const resolvePdfUrl = async () => {
+      const drawing = currentDrawing
+      console.log("drawing:", drawing)
+      console.log("file_path:", drawing?.file_path)
+      if (!drawing?.file_path) {
+        setPdfUrl('')
+        setPdfError('PDF URLの取得に失敗しました')
+        return
+      }
+
+      try {
+        const supabase = getSupabaseBrowserClient()
+        const { data: publicData } = supabase.storage.from('drawings-pdf').getPublicUrl(drawing.file_path)
+        let nextPdfUrl = publicData.publicUrl?.trim() ?? ''
+
+        if (!nextPdfUrl) {
+          const { data: signedData, error } = await supabase.storage
+            .from('drawings-pdf')
+            .createSignedUrl(drawing.file_path, 60 * 60)
+          if (error) throw error
+          nextPdfUrl = signedData?.signedUrl ?? ''
+        }
+
+        setPdfUrl(nextPdfUrl)
+        setPdfError(nextPdfUrl ? null : 'PDF URLの取得に失敗しました')
+        console.log("pdfUrl:", nextPdfUrl)
+      } catch (error) {
+        console.error("pdf url error:", error)
+        setPdfUrl('')
+        setPdfError('PDF URLの取得に失敗しました')
+      }
     }
-  }, [currentDrawing?.signed_url])
+
+    void resolvePdfUrl()
+  }, [currentDrawing])
+
+  useEffect(() => {
+    console.log("pdfUrl:", pdfUrl)
+  }, [pdfUrl])
 
   const filteredIssues = useMemo(() => {
     const key = searchText.trim().toLowerCase()
@@ -330,11 +367,20 @@ export default function DrawingEditorClient() {
                   <CardContent className="text-sm text-muted-foreground">{pdfError}</CardContent>
                 </Card>
               </div>
+            ) : !pdfUrl ? (
+              <div className="flex h-full items-center justify-center p-6">
+                <Card className="max-w-md">
+                  <CardHeader>
+                    <CardTitle>PDF表示エラー</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">PDF URLの取得に失敗しました</CardContent>
+                </Card>
+              </div>
             ) : (
               <div className="flex min-h-full items-center justify-center">
                 <div className="bg-white p-2 shadow">
                   <Document
-                    file={currentDrawing?.signed_url ?? undefined}
+                    file={pdfUrl}
                     loading={<p className="p-4 text-sm text-muted-foreground">PDF読込中...</p>}
                     onLoadSuccess={() => {
                       console.log('pdf loaded')
