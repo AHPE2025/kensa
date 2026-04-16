@@ -1,0 +1,51 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getAuthedClient } from '@/lib/api-auth'
+
+type Params = { params: Promise<{ issueId: string }> }
+
+export async function PATCH(request: NextRequest, { params }: Params) {
+  const authed = await getAuthedClient(request)
+  if ('error' in authed) return authed.error
+  const { client, tenantId } = authed
+  const { issueId } = await params
+  const body = (await request.json()) as Record<string, unknown>
+
+  const allowed = [
+    'page_index',
+    'floor_label',
+    'pin_x',
+    'pin_y',
+    'callout_x',
+    'callout_y',
+    'issue_type',
+    'issue_text',
+    'contractor_id',
+    'status',
+  ]
+  const updates: Record<string, unknown> = {}
+  for (const key of allowed) {
+    if (key in body) updates[key] = body[key]
+  }
+
+  const { data, error } = await client
+    .from('issues')
+    .update(updates)
+    .eq('id', issueId)
+    .eq('tenant_id', tenantId)
+    .select('*, contractor:contractors(id,name)')
+    .single()
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  return NextResponse.json({ issue: data })
+}
+
+export async function DELETE(request: NextRequest, { params }: Params) {
+  const authed = await getAuthedClient(request)
+  if ('error' in authed) return authed.error
+  const { client, tenantId } = authed
+  const { issueId } = await params
+
+  const { error } = await client.from('issues').delete().eq('id', issueId).eq('tenant_id', tenantId)
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  return NextResponse.json({ ok: true })
+}
