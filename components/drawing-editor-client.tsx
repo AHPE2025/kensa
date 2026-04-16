@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Download, Filter, MapPin, Move, Pencil, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
-import { Layer, Line, Circle, Group, Rect, Text, Stage } from 'react-konva'
+import { Document, Page, pdfjs } from 'react-pdf'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -14,6 +14,9 @@ import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import { ISSUE_TYPES, type Contractor, type Drawing, type Issue } from '@/lib/domain'
 import { toast } from 'sonner'
+
+pdfjs.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
 
 type DrawingRow = Drawing & { signed_url: string | null; issue_count: number; file_name: string }
 
@@ -49,7 +52,8 @@ export default function DrawingEditorClient() {
   const [currentDrawing, setCurrentDrawing] = useState<DrawingRow | null>(null)
   const [contractors, setContractors] = useState<Contractor[]>([])
   const [pageIndex, setPageIndex] = useState(0)
-  const [pageSize, setPageSize] = useState({ width: 1000, height: 1414 })
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 })
+  const [pdfError, setPdfError] = useState<string | null>(null)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
   const [saveAndContinue, setSaveAndContinue] = useState(false)
@@ -62,9 +66,6 @@ export default function DrawingEditorClient() {
   })
 
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const stageRef = useRef<any>(null)
-  const draggingRef = useRef(false)
 
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
@@ -104,24 +105,31 @@ export default function DrawingEditorClient() {
   }, [user, drawingId, projectId])
 
   useEffect(() => {
-    const renderPdf = async () => {
-      if (!currentDrawing?.signed_url || !canvasRef.current) return
-      const pdfjs = await import('pdfjs-dist')
-      pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`
-      const loadingTask = pdfjs.getDocument(currentDrawing.signed_url)
-      const doc = await loadingTask.promise
-      const page = await doc.getPage(pageIndex + 1)
-      const viewport = page.getViewport({ scale: 1.6 })
-      const canvas = canvasRef.current
-      const context = canvas.getContext('2d')
-      if (!context) return
-      canvas.width = viewport.width
-      canvas.height = viewport.height
-      setPageSize({ width: viewport.width, height: viewport.height })
-      await page.render({ canvasContext: context, viewport }).promise
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }, [drawingId, setZoom, setPan])
+
+  useEffect(() => {
+    const target = containerRef.current
+    if (!target) return
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const nextWidth = Math.max(0, entry.contentRect.width)
+      const nextHeight = Math.max(0, entry.contentRect.height)
+      setViewportSize({ width: nextWidth, height: nextHeight })
+    })
+    observer.observe(target)
+
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (currentDrawing?.signed_url) {
+      console.log('pdf loading start')
     }
-    void renderPdf()
-  }, [currentDrawing?.signed_url, pageIndex])
+  }, [currentDrawing?.signed_url])
 
   const filteredIssues = useMemo(() => {
     const key = searchText.trim().toLowerCase()
@@ -143,16 +151,6 @@ export default function DrawingEditorClient() {
     ...issue,
     no: numberedIssues.find((x) => x.id === issue.id)?.no ?? 0,
   }))
-
-  const onStageClick = () => {
-    if (mode !== 'add' || draggingRef.current) return
-    const stage = stageRef.current
-    const pos = stage?.getPointerPosition()
-    if (!pos) return
-    setAddingPin({ x: pos.x / pageSize.width, y: pos.y / pageSize.height })
-    setForm((prev) => ({ ...prev, floor_label: currentDrawing?.floor_label ?? prev.floor_label }))
-    setIssueModalOpen(true)
-  }
 
   const onSaveIssue = async (event: FormEvent) => {
     event.preventDefault()
@@ -214,14 +212,7 @@ export default function DrawingEditorClient() {
 
   const jumpToIssue = (issue: Issue) => {
     setSelectedIssueId(issue.id)
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const px = issue.pin_x * pageSize.width
-    const py = issue.pin_y * pageSize.height
-    setPan({
-      x: rect.width / 2 - px * zoom,
-      y: rect.height / 2 - py * zoom,
-    })
+    console.log('issue selected:', issue.id)
   }
 
   const issueContractorName = (issue: Issue) => issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? ''
@@ -329,101 +320,42 @@ export default function DrawingEditorClient() {
         </aside>
 
         <section className="relative flex-1 overflow-hidden" ref={containerRef}>
-          <div className="absolute inset-0 overflow-auto bg-slate-200">
-            <div
-              className="relative mx-auto my-4 w-fit bg-white shadow"
-              style={{
-                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                transformOrigin: 'top left',
-              }}
-            >
-              <canvas ref={canvasRef} className="block" />
-              <Stage
-                ref={stageRef}
-                width={pageSize.width}
-                height={pageSize.height}
-                className="absolute left-0 top-0"
-                onMouseDown={(event) => {
-                  draggingRef.current = false
-                  if (mode === 'add') onStageClick()
-                  if (mode === 'move') {
-                    const start = stageRef.current?.getPointerPosition()
-                    if (!start) return
-                    const startPan = { ...pan }
-                    const handleMove = () => {
-                      const pos = stageRef.current?.getPointerPosition()
-                      if (!pos) return
-                      draggingRef.current = true
-                      setPan({ x: startPan.x + (pos.x - start.x), y: startPan.y + (pos.y - start.y) })
-                    }
-                    const handleUp = () => {
-                      window.removeEventListener('mousemove', handleMove)
-                      window.removeEventListener('mouseup', handleUp)
-                    }
-                    window.addEventListener('mousemove', handleMove)
-                    window.addEventListener('mouseup', handleUp)
-                  }
-                }}
-              >
-                <Layer>
-                  {pageIssues.map((issue) => {
-                    const px = issue.pin_x * pageSize.width
-                    const py = issue.pin_y * pageSize.height
-                    const cx = issue.callout_x * pageSize.width
-                    const cy = issue.callout_y * pageSize.height
-                    const isSelected = selectedIssueId === issue.id
-                    const no = numberedIssues.find((x) => x.id === issue.id)?.no ?? 0
-
-                    return (
-                      <Group key={issue.id} onClick={() => setSelectedIssueId(issue.id)}>
-                        <Line points={[px, py, cx, cy]} stroke={isSelected ? '#2563eb' : '#1e293b'} strokeWidth={1.5} />
-                        <Circle
-                          x={px}
-                          y={py}
-                          radius={9}
-                          fill={isSelected ? '#2563eb' : '#0f172a'}
-                          draggable={mode === 'edit'}
-                          onDragStart={() => {
-                            draggingRef.current = true
-                          }}
-                          onDragEnd={(event) =>
-                            void updateIssue(issue.id, {
-                              pin_x: event.target.x() / pageSize.width,
-                              pin_y: event.target.y() / pageSize.height,
-                            })
-                          }
-                        />
-                        <Text text={String(no)} x={px - 4} y={py - 6} fontSize={10} fill="#fff" />
-                        <Group
-                          x={cx}
-                          y={cy}
-                          draggable={mode === 'edit'}
-                          onDragStart={() => {
-                            draggingRef.current = true
-                          }}
-                          onDragEnd={(event) =>
-                            void updateIssue(issue.id, {
-                              callout_x: event.target.x() / pageSize.width,
-                              callout_y: event.target.y() / pageSize.height,
-                            })
-                          }
-                        >
-                          <Rect width={220} height={60} fill="#ffffff" stroke="#1d4ed8" cornerRadius={6} shadowBlur={2} />
-                          <Text
-                            x={8}
-                            y={6}
-                            width={204}
-                            text={`${issue.floor_label} ${issue.issue_type}\n${issueContractorName(issue)}\n${issue.issue_text.slice(0, 20)}`}
-                            fontSize={12}
-                            fill="#0f172a"
-                          />
-                        </Group>
-                      </Group>
-                    )
-                  })}
-                </Layer>
-              </Stage>
-            </div>
+          <div className="absolute inset-0 overflow-auto bg-slate-200 p-4">
+            {pdfError ? (
+              <div className="flex h-full items-center justify-center p-6">
+                <Card className="max-w-md">
+                  <CardHeader>
+                    <CardTitle>PDF表示エラー</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">{pdfError}</CardContent>
+                </Card>
+              </div>
+            ) : (
+              <div className="flex min-h-full items-center justify-center">
+                <div className="bg-white p-2 shadow">
+                  <Document
+                    file={currentDrawing?.signed_url ?? undefined}
+                    loading={<p className="p-4 text-sm text-muted-foreground">PDF読込中...</p>}
+                    onLoadSuccess={() => {
+                      console.log('pdf loaded')
+                      setPdfError(null)
+                    }}
+                    onLoadError={(error) => {
+                      console.error('pdf load error:', error)
+                      setPdfError('PDFを表示できません。図面ファイルまたはアクセス権限を確認してください。')
+                    }}
+                  >
+                    <Page
+                      pageNumber={1}
+                      width={Math.max(280, Math.min(viewportSize.width - 32, 1200))}
+                      scale={zoom}
+                      renderAnnotationLayer={false}
+                      renderTextLayer={false}
+                    />
+                  </Document>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="absolute bottom-4 right-4 flex flex-col gap-2">

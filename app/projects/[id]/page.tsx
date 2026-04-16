@@ -46,24 +46,57 @@ export default function ProjectDetailPage() {
   }, [loadingAuth, user, router])
 
   const loadAll = async () => {
-    const [projectRes, drawingRes, contractorRes] = await Promise.all([
+    const [projectResult, drawingResult, contractorResult] = await Promise.allSettled([
       authedFetch(`/api/projects/${projectId}`),
       authedFetch(`/api/projects/${projectId}/drawings`),
       authedFetch(`/api/projects/${projectId}/contractors`),
     ])
 
-    const projectData = (await projectRes.json()) as { project?: Project; error?: string }
-    const drawingData = (await drawingRes.json()) as { drawings?: DrawingRow[]; error?: string }
-    const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
+    if (projectResult.status === 'fulfilled') {
+      const projectData = (await projectResult.value.json()) as { project?: Project; error?: string }
+      if (!projectResult.value.ok) {
+        console.error('project fetch error:', projectData.error)
+        toast.error(projectData.error ?? '案件取得失敗')
+      } else {
+        setProject(projectData.project ?? null)
+      }
+    } else {
+      console.error('project fetch error:', projectResult.reason)
+      toast.error('案件取得失敗')
+    }
 
-    if (!projectRes.ok) return toast.error(projectData.error ?? '案件取得失敗')
-    if (!drawingRes.ok) return toast.error(drawingData.error ?? '図面取得失敗')
-    if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
+    if (drawingResult.status === 'fulfilled') {
+      const drawingData = (await drawingResult.value.json()) as { drawings?: DrawingRow[]; error?: string }
+      if (!drawingResult.value.ok) {
+        console.error('drawings fetch error:', drawingData.error)
+        setDrawings([])
+      } else {
+        setDrawings(drawingData.drawings ?? [])
+      }
+    } else {
+      console.error('drawings fetch error:', drawingResult.reason)
+      setDrawings([])
+    }
 
-    setProject(projectData.project ?? null)
-    setDrawings(drawingData.drawings ?? [])
-    setContractors(contractorData.contractors ?? [])
-    setExportContractorId((prev) => prev || contractorData.contractors?.[0]?.id || '')
+    if (contractorResult.status === 'fulfilled') {
+      const contractorData = (await contractorResult.value.json()) as {
+        contractors?: Contractor[]
+        error?: string
+      }
+      if (!contractorResult.value.ok) {
+        console.error('contractors fetch error:', contractorData.error)
+        setContractors([])
+        setExportContractorId('')
+      } else {
+        const nextContractors = contractorData.contractors ?? []
+        setContractors(nextContractors)
+        setExportContractorId((prev) => prev || nextContractors[0]?.id || '')
+      }
+    } else {
+      console.error('contractors fetch error:', contractorResult.reason)
+      setContractors([])
+      setExportContractorId('')
+    }
   }
 
   useEffect(() => {
@@ -71,39 +104,52 @@ export default function ProjectDetailPage() {
   }, [user, projectId])
 
   const getPdfPageCount = async (target: File) => {
-    const pdfjs = await import('pdfjs-dist')
-    pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
-    const bytes = await target.arrayBuffer()
-    const doc = await pdfjs.getDocument({ data: bytes }).promise
-    return doc.numPages
+    try {
+      const pdfjsLib = await import('pdfjs-dist')
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url
+      ).toString()
+      const bytes = await target.arrayBuffer()
+      const doc = await pdfjsLib.getDocument({ data: bytes }).promise
+      return doc.numPages
+    } catch (error) {
+      console.error('pdf page count error:', error)
+      return 1
+    }
   }
 
   const onUpload = async (event: FormEvent) => {
     event.preventDefault()
     if (!file || !floorLabel.trim()) return
     setUploading(true)
+    try {
+      const pageCount = await getPdfPageCount(file)
+      const form = new FormData()
+      form.set('floorLabel', floorLabel.trim())
+      form.set('pageCount', String(pageCount))
+      form.set('file', file)
 
-    const pageCount = await getPdfPageCount(file)
-    const form = new FormData()
-    form.set('floorLabel', floorLabel.trim())
-    form.set('pageCount', String(pageCount))
-    form.set('file', file)
-
-    const response = await authedFetch(`/api/projects/${projectId}/drawings`, {
-      method: 'POST',
-      body: form,
-    })
-    const data = (await response.json()) as { error?: string }
-    if (!response.ok) {
-      toast.error(data.error ?? 'アップロード失敗')
+      const response = await authedFetch(`/api/projects/${projectId}/drawings`, {
+        method: 'POST',
+        body: form,
+      })
+      const data = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        toast.error(data.error ?? 'アップロード失敗')
+        setUploading(false)
+        return
+      }
+      toast.success('図面をアップロードしました')
+      setFloorLabel('')
+      setFile(null)
+      await loadAll()
+    } catch (error) {
+      console.error('pdf page count error:', error)
+      toast.error('PDFアップロードに失敗しました')
+    } finally {
       setUploading(false)
-      return
     }
-    toast.success('図面をアップロードしました')
-    setFloorLabel('')
-    setFile(null)
-    setUploading(false)
-    await loadAll()
   }
 
   const onOpenContractorDialog = (contractor?: Contractor) => {
@@ -251,22 +297,30 @@ export default function ProjectDetailPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {drawings.map((drawing) => (
-                    <TableRow key={drawing.id}>
-                      <TableCell>{drawing.floor_label}</TableCell>
-                      <TableCell>{drawing.file_name}</TableCell>
-                      <TableCell>{drawing.page_count}</TableCell>
-                      <TableCell>{drawing.issue_count}</TableCell>
-                      <TableCell className="text-right">
-                        <Button asChild variant="outline" size="sm">
-                          <Link href={`/projects/${projectId}/drawings/${drawing.id}`}>
-                            <Pencil className="mr-1 h-3.5 w-3.5" />
-                            編集
-                          </Link>
-                        </Button>
+                  {drawings.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                        図面がありません
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    drawings.map((drawing) => (
+                      <TableRow key={drawing.id}>
+                        <TableCell>{drawing.floor_label}</TableCell>
+                        <TableCell>{drawing.file_name}</TableCell>
+                        <TableCell>{drawing.page_count}</TableCell>
+                        <TableCell>{drawing.issue_count}</TableCell>
+                        <TableCell className="text-right">
+                          <Button asChild variant="outline" size="sm">
+                            <Link href={`/projects/${projectId}/drawings/${drawing.id}`}>
+                              <Pencil className="mr-1 h-3.5 w-3.5" />
+                              編集
+                            </Link>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </CardContent>
@@ -292,26 +346,34 @@ export default function ProjectDetailPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {contractors.map((contractor) => (
-                    <TableRow key={contractor.id}>
-                      <TableCell>{contractor.name}</TableCell>
-                      <TableCell>{contractor.category ?? '-'}</TableCell>
-                      <TableCell>{contractor.phone ?? '-'}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" onClick={() => onOpenContractorDialog(contractor)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-destructive"
-                          onClick={() => onDeleteContractor(contractor.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                  {contractors.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center text-muted-foreground">
+                        業者がありません
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    contractors.map((contractor) => (
+                      <TableRow key={contractor.id}>
+                        <TableCell>{contractor.name}</TableCell>
+                        <TableCell>{contractor.category ?? '-'}</TableCell>
+                        <TableCell>{contractor.phone ?? '-'}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="icon" onClick={() => onOpenContractorDialog(contractor)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-destructive"
+                            onClick={() => onDeleteContractor(contractor.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </CardContent>

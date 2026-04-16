@@ -66,10 +66,34 @@ export default function ProjectsPage() {
     event.preventDefault()
     setSaving(true)
     try {
+      const supabase = getSupabaseBrowserClient()
+      const profileResult = await supabase
+        .from('profiles')
+        .select('tenant_id')
+        .eq('id', user?.id ?? '')
+        .maybeSingle()
+      if (profileResult.error) {
+        console.error('create project error:', profileResult.error)
+        toast.error('tenant情報の取得に失敗しました。再ログインしてください。')
+        return
+      }
+      const tenantId = profileResult.data?.tenant_id
+      if (!tenantId) {
+        const error = 'profiles.tenant_id が見つかりません。管理者にお問い合わせください。'
+        console.error('create project error:', error)
+        toast.error(error)
+        return
+      }
+
       const response = await authedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          name: form.name,
+          address: form.address,
+          inspection_date: form.inspection_date,
+        }),
       })
       const data = (await response.json()) as { error?: string }
       if (!response.ok) {

@@ -9,12 +9,19 @@ export async function GET(request: NextRequest, { params }: Params) {
   const { client, tenantId } = authed
   const { drawingId } = await params
 
-  const { data: drawing } = await client
+  const { data: drawing, error: drawingError } = await client
     .from('drawings')
     .select('*')
     .eq('id', drawingId)
     .eq('tenant_id', tenantId)
     .single()
+  if (drawingError) {
+    console.error('drawing fetch error:', {
+      tenantId,
+      drawingId,
+      error: drawingError,
+    })
+  }
 
   const { data: issues, error } = await client
     .from('issues')
@@ -23,8 +30,15 @@ export async function GET(request: NextRequest, { params }: Params) {
     .eq('tenant_id', tenantId)
     .order('created_at', { ascending: true })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-  return NextResponse.json({ drawing, issues: issues ?? [] })
+  if (error) {
+    console.error('issues fetch error:', {
+      tenantId,
+      drawingId,
+      error,
+    })
+    return NextResponse.json({ drawing: drawing ?? null, issues: [] })
+  }
+  return NextResponse.json({ drawing: drawing ?? null, issues: issues ?? [] })
 }
 
 export async function POST(request: NextRequest, { params }: Params) {

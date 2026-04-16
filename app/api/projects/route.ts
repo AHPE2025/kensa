@@ -50,19 +50,30 @@ export async function POST(request: NextRequest) {
   const { client, tenantId } = authed
 
   const body = (await request.json()) as {
+    tenant_id?: string
     name?: string
     address?: string
     inspection_date?: string
   }
 
-  if (!body.name || !body.address || !body.inspection_date) {
-    return NextResponse.json({ error: 'name,address,inspection_date は必須です' }, { status: 400 })
+  if (!body.tenant_id || !body.name || !body.address || !body.inspection_date) {
+    return NextResponse.json(
+      { error: 'tenant_id,name,address,inspection_date は必須です' },
+      { status: 400 }
+    )
+  }
+
+  if (body.tenant_id !== tenantId) {
+    return NextResponse.json(
+      { error: 'tenant_id がログインユーザーのtenantと一致しません' },
+      { status: 403 }
+    )
   }
 
   const { data, error } = await client
     .from('projects')
     .insert({
-      tenant_id: tenantId,
+      tenant_id: body.tenant_id,
       name: body.name.trim(),
       address: body.address.trim(),
       inspection_date: body.inspection_date,

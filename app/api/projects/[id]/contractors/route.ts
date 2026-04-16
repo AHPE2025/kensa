@@ -9,13 +9,24 @@ export async function GET(request: NextRequest, { params }: Params) {
   const { client, tenantId } = authed
   const { id: projectId } = await params
 
-  const { data: project } = await client
+  const { data: project, error: projectError } = await client
     .from('projects')
     .select('id')
     .eq('id', projectId)
     .eq('tenant_id', tenantId)
     .maybeSingle()
-  if (!project) return NextResponse.json({ error: 'project not found' }, { status: 404 })
+  if (projectError) {
+    console.error('contractors project check error:', {
+      tenantId,
+      projectId,
+      error: projectError,
+    })
+    return NextResponse.json({ contractors: [] })
+  }
+  if (!project) {
+    console.error('contractors project not found:', { tenantId, projectId })
+    return NextResponse.json({ contractors: [] })
+  }
 
   const { data, error } = await client
     .from('contractors')
@@ -23,7 +34,14 @@ export async function GET(request: NextRequest, { params }: Params) {
     .eq('tenant_id', tenantId)
     .order('name', { ascending: true })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  if (error) {
+    console.error('contractors fetch error:', {
+      tenantId,
+      projectId,
+      error,
+    })
+    return NextResponse.json({ contractors: [] })
+  }
   return NextResponse.json({ contractors: data ?? [] })
 }
 
