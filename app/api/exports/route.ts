@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceRoleClient, createUserScopedServerClient } from '@/lib/supabase-server'
 import { toAsciiFileName } from '@/lib/filename'
+import { DRAWING_SIGNED_URL_TTL_SECONDS, resolveDrawingStoragePath, STORAGE_BUCKETS } from '@/lib/storage'
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
@@ -75,9 +76,21 @@ export async function POST(request: NextRequest) {
         pageMap.set(issue.page_index, list)
       }
 
+      const resolvedPath = resolveDrawingStoragePath(drawing)
+      if (!resolvedPath.ok) {
+        throw new Error(`drawing storage path missing: drawingId=${drawing.id}`)
+      }
+      if (resolvedPath.warning === 'bucket_prefix_removed') {
+        console.warn('exports drawing path normalized: bucket prefix removed', {
+          drawingId: drawing.id,
+          bucket: STORAGE_BUCKETS.drawingsPdf,
+          originalPath: drawing.storage_path ?? drawing.file_path ?? null,
+          normalizedPath: resolvedPath.path,
+        })
+      }
       const { data: fileBlob, error: fileError } = await service.storage
-        .from('drawings-pdf')
-        .download(drawing.file_path)
+        .from(STORAGE_BUCKETS.drawingsPdf)
+        .download(resolvedPath.path)
       if (fileError || !fileBlob) {
         throw new Error(fileError?.message ?? 'drawing download failed')
       }
@@ -137,14 +150,16 @@ export async function POST(request: NextRequest) {
   const exportPath = `${tenantId}/${project.id}/${fileName}`
 
   const { error: uploadError } = await service.storage
-    .from('exports-pdf')
+    .from(STORAGE_BUCKETS.exportsPdf)
     .upload(exportPath, Buffer.from(pdfArrayBuffer), {
       contentType: 'application/pdf',
       upsert: true,
     })
   if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 })
 
-  const { data: signed } = await service.storage.from('exports-pdf').createSignedUrl(exportPath, 60 * 60)
+  const { data: signed } = await service.storage
+    .from(STORAGE_BUCKETS.exportsPdf)
+    .createSignedUrl(exportPath, DRAWING_SIGNED_URL_TTL_SECONDS)
 
   return NextResponse.json({
     fileName,

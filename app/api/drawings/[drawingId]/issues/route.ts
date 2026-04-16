@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
+import { STORAGE_BUCKETS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
 
@@ -21,6 +22,14 @@ export async function GET(request: NextRequest, { params }: Params) {
       drawingId,
       error: drawingError,
     })
+  } else if (drawing) {
+    console.info('drawing record resolved for editor:', {
+      drawingId: drawing.id,
+      fileName: drawing.file_name ?? drawing.file_path?.split('/').pop() ?? null,
+      filePath: drawing.file_path ?? null,
+      storagePath: drawing.storage_path ?? drawing.file_path ?? null,
+      bucket: STORAGE_BUCKETS.drawingsPdf,
+    })
   }
 
   const { data: issues, error } = await client
@@ -38,7 +47,14 @@ export async function GET(request: NextRequest, { params }: Params) {
     })
     return NextResponse.json({ drawing: drawing ?? null, issues: [] })
   }
-  return NextResponse.json({ drawing: drawing ?? null, issues: issues ?? [] })
+  const drawingWithStoragePath = drawing
+    ? {
+        ...drawing,
+        storage_path: drawing.storage_path ?? drawing.file_path ?? null,
+        file_name: drawing.file_name ?? drawing.file_path?.split('/').pop() ?? null,
+      }
+    : null
+  return NextResponse.json({ drawing: drawingWithStoragePath, issues: issues ?? [] })
 }
 
 export async function POST(request: NextRequest, { params }: Params) {

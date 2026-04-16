@@ -35,6 +35,8 @@ export type Drawing = {
   project_id: string
   floor_label: string
   file_path: string
+  storage_path?: string | null
+  file_name?: string | null
   page_count: number
   created_at: string
 }

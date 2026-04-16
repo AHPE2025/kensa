@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient, getAuthedUser } from '@/lib/api-auth'
 import { toAsciiFileName } from '@/lib/filename'
+import { DRAWING_SIGNED_URL_TTL_SECONDS, resolveDrawingStoragePath, STORAGE_BUCKETS } from '@/lib/storage'
 import { createServiceRoleClient } from '@/lib/supabase-server'
 
 type Params = { params: Promise<{ id: string }> }
@@ -47,11 +48,34 @@ export async function GET(request: NextRequest, { params }: Params) {
 
   const rows = await Promise.all(
     (drawings ?? []).map(async (d) => {
-      const { data: signed } = await client.storage.from('drawings-pdf').createSignedUrl(d.file_path, 60 * 60)
+      const resolvedPath = resolveDrawingStoragePath(d)
+      if (!resolvedPath.ok) {
+        console.error('drawings signed url skipped: path missing', {
+          drawingId: d.id,
+          fileName: d.file_name ?? d.file_path?.split('/').pop() ?? null,
+          filePath: d.file_path ?? null,
+          storagePath: d.storage_path ?? null,
+          bucket: STORAGE_BUCKETS.drawingsPdf,
+        })
+      } else if (resolvedPath.warning === 'bucket_prefix_removed') {
+        console.warn('drawings storage path normalized: bucket prefix removed', {
+          drawingId: d.id,
+          bucket: STORAGE_BUCKETS.drawingsPdf,
+          originalPath: d.storage_path ?? d.file_path ?? null,
+          normalizedPath: resolvedPath.path,
+        })
+      }
+
+      const { data: signed } = resolvedPath.ok
+        ? await client.storage
+            .from(STORAGE_BUCKETS.drawingsPdf)
+            .createSignedUrl(resolvedPath.path, DRAWING_SIGNED_URL_TTL_SECONDS)
+        : { data: null as { signedUrl?: string | null } | null }
       return {
         ...d,
         issue_count: countMap.get(d.id) ?? 0,
         signed_url: signed?.signedUrl ?? null,
+        storage_path: resolvedPath.ok ? resolvedPath.path : d.storage_path ?? d.file_path ?? null,
         file_name: d.file_path.split('/').pop() ?? 'drawing.pdf',
       }
     })
@@ -107,19 +131,20 @@ export async function POST(request: NextRequest, { params }: Params) {
   }
 
   const baseName = toAsciiFileName(file.name.replace(/\.pdf$/i, ''))
-  const filePath = `${tenantId}/${projectId}/${Date.now()}_${baseName}.pdf`
+  const storagePath = `${tenantId}/${projectId}/${Date.now()}_${baseName}.pdf`
   const bytes = Buffer.from(await file.arrayBuffer())
 
   const { error: uploadError } = await serviceClient.storage
-    .from('drawings-pdf')
-    .upload(filePath, bytes, { contentType: 'application/pdf', upsert: false })
+    .from(STORAGE_BUCKETS.drawingsPdf)
+    .upload(storagePath, bytes, { contentType: 'application/pdf', upsert: false })
 
   if (uploadError) {
     console.error('drawings storage upload error:', {
       projectId,
       userId: user.id,
       tenantId,
-      filePath,
+      storagePath,
+      bucket: STORAGE_BUCKETS.drawingsPdf,
       error: uploadError,
     })
     return NextResponse.json({ error: uploadError.message }, { status: 400 })
@@ -131,7 +156,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       tenant_id: tenantId,
       project_id: projectId,
       floor_label: floorLabel,
-      file_path: filePath,
+      file_path: storagePath,
       page_count: pageCount,
     })
     .select('*')
@@ -144,7 +169,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       tenantId,
       floorLabel,
       pageCount,
-      filePath,
+      storagePath,
+      bucket: STORAGE_BUCKETS.drawingsPdf,
       error,
     })
     return NextResponse.json({ error: error.message }, { status: 400 })

@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { authedFetch } from '@/lib/authed-fetch'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
+import { DRAWING_SIGNED_URL_TTL_SECONDS, resolveDrawingStoragePath, STORAGE_BUCKETS } from '@/lib/storage'
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { ISSUE_TYPES, type Contractor, type Drawing, type Issue } from '@/lib/domain'
 import { toast } from 'sonner'
@@ -89,7 +90,14 @@ export default function DrawingEditorClient() {
     if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
 
     setDrawings(drawingListData.drawings ?? [])
-    const drawing = (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
+    const drawingFromList = (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
+    const drawing = issueData.drawing
+      ? {
+          ...drawingFromList,
+          ...issueData.drawing,
+          storage_path: issueData.drawing.storage_path ?? issueData.drawing.file_path ?? null,
+        }
+      : drawingFromList
     setCurrentDrawing(drawing)
     setContractors(contractorData.contractors ?? [])
     setIssues(issueData.issues ?? [])
@@ -130,49 +138,96 @@ export default function DrawingEditorClient() {
   useEffect(() => {
     const resolvePdfUrl = async () => {
       const drawing = currentDrawing
-      console.log("drawing:", drawing)
-      console.log("file_path:", drawing?.file_path)
       if (!drawing) {
         setPdfUrl('')
         setPdfError(null)
         return
       }
 
-      if (!drawing.file_path) {
+      console.info('drawing resolved for pdf viewer:', {
+        drawingId: drawing.id,
+        fileName: drawing.file_name ?? drawing.file_path?.split('/').pop() ?? null,
+        filePath: drawing.file_path ?? null,
+        storagePath: drawing.storage_path ?? drawing.file_path ?? null,
+        bucket: STORAGE_BUCKETS.drawingsPdf,
+      })
+
+      const resolvedPath = resolveDrawingStoragePath(drawing)
+      if (!resolvedPath.ok) {
         setPdfUrl('')
-        setPdfError('PDF URLの取得に失敗しました')
+        setPdfError('PDF表示失敗: storage_path が見つかりません（drawing.file_path / storage_path を確認してください）')
+        console.error('pdf url resolve error: storage path missing', {
+          drawingId: drawing.id,
+          fileName: drawing.file_name ?? null,
+          filePath: drawing.file_path ?? null,
+          storagePath: drawing.storage_path ?? null,
+          bucket: STORAGE_BUCKETS.drawingsPdf,
+          reason: resolvedPath.reason,
+        })
         return
+      }
+      if (resolvedPath.warning === 'bucket_prefix_removed') {
+        console.warn('pdf storage path normalized: bucket prefix removed', {
+          drawingId: drawing.id,
+          bucket: STORAGE_BUCKETS.drawingsPdf,
+          originalPath: drawing.storage_path ?? drawing.file_path ?? null,
+          normalizedPath: resolvedPath.path,
+        })
       }
 
       try {
         const supabase = getSupabaseBrowserClient()
-        const { data: publicData } = supabase.storage.from('drawings-pdf').getPublicUrl(drawing.file_path)
-        let nextPdfUrl = publicData.publicUrl?.trim() ?? ''
+        const { data: signedData, error } = await supabase.storage
+          .from(STORAGE_BUCKETS.drawingsPdf)
+          .createSignedUrl(resolvedPath.path, DRAWING_SIGNED_URL_TTL_SECONDS)
 
+        if (error) {
+          setPdfUrl('')
+          setPdfError(
+            `PDF表示失敗: signed URL生成に失敗しました（bucket=${STORAGE_BUCKETS.drawingsPdf}, path=${resolvedPath.path}${resolvedPath.warning === 'bucket_prefix_removed' ? ', bucket/path不整合の可能性あり' : ''}）`
+          )
+          console.error('pdf signed url create error:', {
+            drawingId: drawing.id,
+            bucket: STORAGE_BUCKETS.drawingsPdf,
+            path: resolvedPath.path,
+            storagePathWarning: resolvedPath.warning ?? null,
+            error,
+          })
+          return
+        }
+
+        const nextPdfUrl = signedData?.signedUrl?.trim() ?? ''
         if (!nextPdfUrl) {
-          const { data: signedData, error } = await supabase.storage
-            .from('drawings-pdf')
-            .createSignedUrl(drawing.file_path, 60 * 60)
-          if (error) throw error
-          nextPdfUrl = signedData?.signedUrl ?? ''
+          setPdfUrl('')
+          setPdfError(
+            `PDF表示失敗: signed URLが空です（bucket=${STORAGE_BUCKETS.drawingsPdf}, path=${resolvedPath.path}）`
+          )
+          console.error('pdf signed url is empty:', {
+            drawingId: drawing.id,
+            bucket: STORAGE_BUCKETS.drawingsPdf,
+            path: resolvedPath.path,
+            storagePathWarning: resolvedPath.warning ?? null,
+          })
+          return
         }
 
         setPdfUrl(nextPdfUrl)
-        setPdfError(nextPdfUrl ? null : 'PDF URLの取得に失敗しました')
-        console.log("pdfUrl:", nextPdfUrl)
+        setPdfError(null)
       } catch (error) {
-        console.error("pdf url error:", error)
+        console.error('pdf url unexpected error:', {
+          drawingId: drawing.id,
+          bucket: STORAGE_BUCKETS.drawingsPdf,
+          path: resolvedPath.path,
+          storagePathWarning: resolvedPath.warning ?? null,
+          error,
+        })
         setPdfUrl('')
-        setPdfError('PDF URLの取得に失敗しました')
+        setPdfError('PDF表示失敗: URL生成処理中に予期しないエラーが発生しました')
       }
     }
 
     void resolvePdfUrl()
   }, [currentDrawing])
-
-  useEffect(() => {
-    console.log("pdfUrl:", pdfUrl)
-  }, [pdfUrl])
 
   const filteredIssues = useMemo(() => {
     const key = searchText.trim().toLowerCase()
