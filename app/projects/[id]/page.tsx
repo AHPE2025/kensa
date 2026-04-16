@@ -36,8 +36,6 @@ export default function ProjectDetailPage() {
   const [contractorForm, setContractorForm] = useState({ name: '', category: '', phone: '' })
   const [exportContractorId, setExportContractorId] = useState('')
   const [exportFloors, setExportFloors] = useState<string[]>([])
-  const [exporting, setExporting] = useState(false)
-  const [exportUrl, setExportUrl] = useState('')
 
   const floors = useMemo(() => [...new Set(drawings.map((d) => d.floor_label))], [drawings])
 
@@ -200,30 +198,8 @@ export default function ProjectDetailPage() {
     setExportFloors((prev) => (prev.includes(floor) ? prev.filter((f) => f !== floor) : [...prev, floor]))
   }
 
-  const onExport = async () => {
-    if (!exportContractorId) {
-      toast.error('業者を選択してください')
-      return
-    }
-    setExporting(true)
-    const response = await authedFetch('/api/exports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        projectId,
-        vendorId: exportContractorId,
-        floors: exportFloors.length ? exportFloors : undefined,
-      }),
-    })
-    const data = (await response.json()) as { error?: string; url?: string }
-    if (!response.ok) {
-      toast.error(data.error ?? 'PDF出力失敗')
-      setExporting(false)
-      return
-    }
-    setExportUrl(data.url ?? '')
-    toast.success('PDFを生成しました')
-    setExporting(false)
+  const handleDownload = () => {
+    window.open('/api/pdf')
   }
 
   if (!project) {
@@ -417,15 +393,10 @@ export default function ProjectDetailPage() {
                   </div>
                 </div>
               </div>
-              <Button className="h-12 bg-blue-600 hover:bg-blue-700" onClick={onExport} disabled={exporting}>
+              <Button className="h-12 bg-blue-600 hover:bg-blue-700" onClick={handleDownload}>
                 <Download className="mr-2 h-4 w-4" />
-                {exporting ? '生成中...' : 'PDF出力'}
+                PDF出力
               </Button>
-              {exportUrl ? (
-                <a href={exportUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline">
-                  生成済みPDFをダウンロード
-                </a>
-              ) : null}
             </CardContent>
           </Card>
         </TabsContent>
