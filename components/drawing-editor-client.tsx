@@ -132,7 +132,13 @@ export default function DrawingEditorClient() {
       const drawing = currentDrawing
       console.log("drawing:", drawing)
       console.log("file_path:", drawing?.file_path)
-      if (!drawing?.file_path) {
+      if (!drawing) {
+        setPdfUrl('')
+        setPdfError(null)
+        return
+      }
+
+      if (!drawing.file_path) {
         setPdfUrl('')
         setPdfError('PDF URLの取得に失敗しました')
         return
