@@ -1,9 +1,11 @@
 export const STORAGE_BUCKETS = {
+  drawings: 'drawings',
   drawingsPdf: 'drawings-pdf',
   exportsPdf: 'exports-pdf',
 } as const
 
 export const DRAWING_SIGNED_URL_TTL_SECONDS = 60 * 60
+export const DRAWING_BUCKET_CANDIDATES = [STORAGE_BUCKETS.drawings, STORAGE_BUCKETS.drawingsPdf] as const
 
 type DrawingPathSource = {
   storage_path?: string | null
