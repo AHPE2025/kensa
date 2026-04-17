@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient, getAuthedUser } from '@/lib/api-auth'
 import { toAsciiFileName } from '@/lib/filename'
-import { DRAWING_SIGNED_URL_TTL_SECONDS, resolveDrawingStoragePath, STORAGE_BUCKETS } from '@/lib/storage'
+import {
+  DRAWING_IMAGES_BUCKET,
+  DRAWING_SIGNED_URL_TTL_SECONDS,
+  DRAWINGS_PDF_BUCKET,
+} from '@/lib/storage'
 import { createServiceRoleClient } from '@/lib/supabase-server'
 
 type Params = { params: Promise<{ id: string }> }
@@ -48,35 +52,24 @@ export async function GET(request: NextRequest, { params }: Params) {
 
   const rows = await Promise.all(
     (drawings ?? []).map(async (d) => {
-      const resolvedPath = resolveDrawingStoragePath(d)
-      if (!resolvedPath.ok) {
-        console.error('drawings signed url skipped: path missing', {
-          drawingId: d.id,
-          fileName: d.file_name ?? d.file_path?.split('/').pop() ?? null,
-          filePath: d.file_path ?? null,
-          storagePath: d.storage_path ?? null,
-          bucket: STORAGE_BUCKETS.drawingsPdf,
-        })
-      } else if (resolvedPath.warning === 'bucket_prefix_removed') {
-        console.warn('drawings storage path normalized: bucket prefix removed', {
-          drawingId: d.id,
-          bucket: STORAGE_BUCKETS.drawingsPdf,
-          originalPath: d.storage_path ?? d.file_path ?? null,
-          normalizedPath: resolvedPath.path,
-        })
-      }
-
-      const { data: signed } = resolvedPath.ok
+      const pageImages = Array.isArray(d.page_images) ? (d.page_images as string[]) : []
+      const previewImagePath = pageImages[0] ?? null
+      const { data: signed } = previewImagePath
         ? await client.storage
-            .from(STORAGE_BUCKETS.drawingsPdf)
-            .createSignedUrl(resolvedPath.path, DRAWING_SIGNED_URL_TTL_SECONDS)
+            .from(DRAWING_IMAGES_BUCKET)
+            .createSignedUrl(previewImagePath, DRAWING_SIGNED_URL_TTL_SECONDS)
         : { data: null as { signedUrl?: string | null } | null }
       return {
         ...d,
         issue_count: countMap.get(d.id) ?? 0,
         signed_url: signed?.signedUrl ?? null,
-        storage_path: resolvedPath.ok ? resolvedPath.path : d.storage_path ?? d.file_path ?? null,
-        file_name: d.file_path.split('/').pop() ?? 'drawing.pdf',
+        storage_path: d.storage_path ?? d.original_pdf_path ?? d.file_path ?? null,
+        file_name:
+          d.file_name ??
+          ((d.original_pdf_path ?? d.file_path ?? '')
+            ? (d.original_pdf_path ?? d.file_path ?? '').split('/').pop() ?? null
+            : null),
+        page_images: pageImages,
       }
     })
   )
@@ -91,8 +84,6 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const form = await request.formData()
   const floorLabel = String(form.get('floorLabel') ?? '').trim() || '未設定'
-  const rawPageCount = Number(form.get('pageCount') ?? 0)
-  const pageCount = Number.isFinite(rawPageCount) && rawPageCount > 0 ? rawPageCount : 1
   const file = form.get('file')
 
   if (!(file instanceof File)) {
@@ -131,32 +122,128 @@ export async function POST(request: NextRequest, { params }: Params) {
   }
 
   const baseName = toAsciiFileName(file.name.replace(/\.pdf$/i, ''))
-  const storagePath = `${tenantId}/${projectId}/${Date.now()}_${baseName}.pdf`
   const bytes = Buffer.from(await file.arrayBuffer())
+  const savedFileName = `${Date.now()}_${baseName}.pdf`
+  const drawingId = crypto.randomUUID()
+  const originalPdfPath = `${tenantId}/${projectId}/original/${savedFileName}`
+
+  const pdfServiceUrl = process.env.PDF_SERVICE_URL
+  if (!pdfServiceUrl) {
+    return NextResponse.json({ error: 'PDF_SERVICE_URL is missing' }, { status: 500 })
+  }
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production'
+  let pdfServiceHost = ''
+  try {
+    pdfServiceHost = new URL(pdfServiceUrl).hostname.toLowerCase()
+  } catch {
+    return NextResponse.json({ error: `Invalid PDF_SERVICE_URL: ${pdfServiceUrl}` }, { status: 500 })
+  }
+  if (isProduction && ['localhost', '127.0.0.1', '::1'].includes(pdfServiceHost)) {
+    return NextResponse.json(
+      { error: `PDF_SERVICE_URL cannot use localhost in production: ${pdfServiceUrl}` },
+      { status: 500 }
+    )
+  }
+
+  const renderUrl = `${pdfServiceUrl.replace(/\/$/, '')}/render-pages`
+  let renderResponse: Response
+  let renderText = ''
+  try {
+    renderResponse = await fetch(renderUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pdf_file_base64: bytes.toString('base64'),
+      }),
+    })
+    renderText = await renderResponse.text()
+  } catch {
+    return NextResponse.json({ error: 'PDF画像化サービスに接続できませんでした' }, { status: 502 })
+  }
+  let renderPayload: {
+    page_count?: number
+    images_base64?: string[]
+    detail?: string
+  }
+  try {
+    renderPayload = (renderText ? JSON.parse(renderText) : {}) as {
+      page_count?: number
+      images_base64?: string[]
+      detail?: string
+    }
+  } catch {
+    renderPayload = {}
+  }
+  const convertedPageCount = Number(renderPayload.page_count ?? renderPayload.images_base64?.length ?? 0)
+  console.log('drawings render-pages result:', {
+    requestUrl: renderUrl,
+    status: renderResponse.status,
+    responseBody: renderText,
+    convertedPageCount,
+  })
+  if (!renderResponse.ok || !Array.isArray(renderPayload.images_base64) || renderPayload.images_base64.length === 0) {
+    return NextResponse.json(
+      { error: renderPayload.detail ?? 'PDFを画像化できませんでした' },
+      { status: 400 }
+    )
+  }
+
+  const pageCount = Number(renderPayload.page_count ?? renderPayload.images_base64.length ?? 0)
+  const pageImagesBase64 = renderPayload.images_base64
 
   const { error: uploadError } = await serviceClient.storage
-    .from(STORAGE_BUCKETS.drawingsPdf)
-    .upload(storagePath, bytes, { contentType: 'application/pdf', upsert: false })
+    .from(DRAWINGS_PDF_BUCKET)
+    .upload(originalPdfPath, bytes, { contentType: 'application/pdf', upsert: false })
 
   if (uploadError) {
     console.error('drawings storage upload error:', {
       projectId,
       userId: user.id,
       tenantId,
-      storagePath,
-      bucket: STORAGE_BUCKETS.drawingsPdf,
+      storagePath: originalPdfPath,
+      bucket: DRAWINGS_PDF_BUCKET,
       error: uploadError,
     })
     return NextResponse.json({ error: uploadError.message }, { status: 400 })
   }
 
+  const pageImagePaths: string[] = []
+  for (let index = 0; index < pageImagesBase64.length; index += 1) {
+    const pageLabel = index + 1
+    const imagePath = `${tenantId}/${projectId}/${drawingId}/page-${pageLabel}.png`
+    const imageBytes = Buffer.from(pageImagesBase64[index], 'base64')
+    const { error: imageUploadError } = await serviceClient.storage
+      .from(DRAWING_IMAGES_BUCKET)
+      .upload(imagePath, imageBytes, { contentType: 'image/png', upsert: false })
+    if (imageUploadError) {
+      return NextResponse.json({ error: imageUploadError.message }, { status: 400 })
+    }
+    pageImagePaths.push(imagePath)
+  }
+  if (pageImagePaths.length === 0 || pageCount <= 0) {
+    return NextResponse.json({ error: '画像変換結果が不正です' }, { status: 400 })
+  }
+
+  console.log('drawings insert payload:', {
+    originalPdfPath,
+    fileName: savedFileName,
+    pageCount,
+    pageImages: pageImagePaths,
+    tenantId,
+    projectId,
+  })
+
   const { data, error } = await serviceClient
     .from('drawings')
     .insert({
+      id: drawingId,
       tenant_id: tenantId,
       project_id: projectId,
       floor_label: floorLabel,
-      file_path: storagePath,
+      file_path: originalPdfPath,
+      original_pdf_path: originalPdfPath,
+      page_images: pageImagePaths,
+      file_name: savedFileName,
       page_count: pageCount,
     })
     .select('*')
@@ -169,8 +256,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       tenantId,
       floorLabel,
       pageCount,
-      storagePath,
-      bucket: STORAGE_BUCKETS.drawingsPdf,
+      storagePath: originalPdfPath,
+      bucket: DRAWINGS_PDF_BUCKET,
       error,
     })
     return NextResponse.json({ error: error.message }, { status: 400 })

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceRoleClient, createUserScopedServerClient } from '@/lib/supabase-server'
 import { toAsciiFileName } from '@/lib/filename'
-import { DRAWING_SIGNED_URL_TTL_SECONDS, resolveDrawingStoragePath, STORAGE_BUCKETS } from '@/lib/storage'
+import { DRAWINGS_PDF_BUCKET, DRAWING_SIGNED_URL_TTL_SECONDS, STORAGE_BUCKETS } from '@/lib/storage'
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
@@ -76,21 +76,13 @@ export async function POST(request: NextRequest) {
         pageMap.set(issue.page_index, list)
       }
 
-      const resolvedPath = resolveDrawingStoragePath(drawing)
-      if (!resolvedPath.ok) {
+      const storagePath = drawing.original_pdf_path ?? drawing.file_path ?? drawing.storage_path ?? ''
+      if (!storagePath) {
         throw new Error(`drawing storage path missing: drawingId=${drawing.id}`)
       }
-      if (resolvedPath.warning === 'bucket_prefix_removed') {
-        console.warn('exports drawing path normalized: bucket prefix removed', {
-          drawingId: drawing.id,
-          bucket: STORAGE_BUCKETS.drawingsPdf,
-          originalPath: drawing.storage_path ?? drawing.file_path ?? null,
-          normalizedPath: resolvedPath.path,
-        })
-      }
       const { data: fileBlob, error: fileError } = await service.storage
-        .from(STORAGE_BUCKETS.drawingsPdf)
-        .download(resolvedPath.path)
+        .from(DRAWINGS_PDF_BUCKET)
+        .download(storagePath)
       if (fileError || !fileBlob) {
         throw new Error(fileError?.message ?? 'drawing download failed')
       }

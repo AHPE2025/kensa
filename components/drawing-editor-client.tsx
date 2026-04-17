@@ -1,9 +1,8 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Download, Filter, MapPin, Move, Pencil, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
-import { Document, Page, pdfjs } from 'react-pdf'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -12,20 +11,15 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { authedFetch } from '@/lib/authed-fetch'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
-import {
-  DRAWING_BUCKET_CANDIDATES,
-  DRAWING_SIGNED_URL_TTL_SECONDS,
-  resolveDrawingStoragePath,
-  STORAGE_BUCKETS,
-} from '@/lib/storage'
-import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { ISSUE_TYPES, type Contractor, type Drawing, type Issue } from '@/lib/domain'
 import { toast } from 'sonner'
 
-pdfjs.GlobalWorkerOptions.workerSrc =
-  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-
-type DrawingRow = Drawing & { signed_url: string | null; issue_count: number; file_name: string }
+type DrawingRow = Drawing & {
+  signed_url: string | null
+  issue_count: number
+  file_name: string
+  signed_page_urls?: Array<string | null>
+}
 
 type IssueForm = {
   floor_label: string
@@ -44,7 +38,6 @@ export default function DrawingEditorClient() {
 
   const mode = useEditorStore((s) => s.mode)
   const zoom = useEditorStore((s) => s.zoom)
-  const pan = useEditorStore((s) => s.pan)
   const issues = useEditorStore((s) => s.issues)
   const contractorFilter = useEditorStore((s) => s.contractorFilter)
   const searchText = useEditorStore((s) => s.searchText)
@@ -59,9 +52,7 @@ export default function DrawingEditorClient() {
   const [currentDrawing, setCurrentDrawing] = useState<DrawingRow | null>(null)
   const [contractors, setContractors] = useState<Contractor[]>([])
   const [pageIndex, setPageIndex] = useState(0)
-  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 })
-  const [pdfError, setPdfError] = useState<string | null>(null)
-  const [pdfUrl, setPdfUrl] = useState('')
+  const [imageError, setImageError] = useState<string | null>(null)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
   const [saveAndContinue, setSaveAndContinue] = useState(false)
@@ -74,6 +65,7 @@ export default function DrawingEditorClient() {
   })
 
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const imageRef = useRef<HTMLImageElement | null>(null)
 
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
@@ -125,130 +117,10 @@ export default function DrawingEditorClient() {
   }, [drawingId, setZoom, setPan])
 
   useEffect(() => {
-    const target = containerRef.current
-    if (!target) return
-
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (!entry) return
-      const nextWidth = Math.max(0, entry.contentRect.width)
-      const nextHeight = Math.max(0, entry.contentRect.height)
-      setViewportSize({ width: nextWidth, height: nextHeight })
-    })
-    observer.observe(target)
-
-    return () => observer.disconnect()
-  }, [])
-
-  useEffect(() => {
-    const resolvePdfUrl = async () => {
-      const drawing = currentDrawing
-      if (!drawing) {
-        setPdfUrl('')
-        setPdfError(null)
-        return
-      }
-
-      console.info('drawing resolved for pdf viewer:', {
-        drawingId: drawing.id,
-        fileName: drawing.file_name ?? drawing.file_path?.split('/').pop() ?? null,
-        filePath: drawing.file_path ?? null,
-        storagePath: drawing.storage_path ?? drawing.file_path ?? null,
-        bucket: STORAGE_BUCKETS.drawingsPdf,
-      })
-
-      const resolvedPath = resolveDrawingStoragePath(drawing)
-      const fileName = drawing.file_name ?? drawing.file_path?.split('/').pop() ?? ''
-      const reconstructedFullPath = fileName ? `${projectId}/${fileName}` : ''
-      const reconstructedNestedPath = fileName ? `drawings/${projectId}/${fileName}` : ''
-
-      console.log('fileName:', fileName)
-      console.log('projectId:', projectId)
-      console.log('fullPath:', reconstructedFullPath)
-
-      const candidatePaths: string[] = []
-      if (resolvedPath.ok) {
-        candidatePaths.push(resolvedPath.path)
-        if (resolvedPath.warning === 'bucket_prefix_removed') {
-          console.warn('pdf storage path normalized: bucket prefix removed', {
-            drawingId: drawing.id,
-            bucket: STORAGE_BUCKETS.drawingsPdf,
-            originalPath: drawing.storage_path ?? drawing.file_path ?? null,
-            normalizedPath: resolvedPath.path,
-          })
-        }
-      } else {
-        console.error('pdf url resolve warning: storage path missing', {
-          drawingId: drawing.id,
-          fileName: drawing.file_name ?? null,
-          filePath: drawing.file_path ?? null,
-          storagePath: drawing.storage_path ?? null,
-          reason: resolvedPath.reason,
-        })
-      }
-      if (reconstructedFullPath && !candidatePaths.includes(reconstructedFullPath)) {
-        candidatePaths.push(reconstructedFullPath)
-      }
-      if (reconstructedNestedPath && !candidatePaths.includes(reconstructedNestedPath)) {
-        candidatePaths.push(reconstructedNestedPath)
-      }
-      if (candidatePaths.length === 0) {
-        setPdfUrl('')
-        setPdfError('PDF表示失敗: storage_path と file_name の両方が不足しているため、Storageパスを構築できません')
-        return
-      }
-
-      try {
-        const supabase = getSupabaseBrowserClient()
-        let nextPdfUrl = ''
-        const attempts: Array<{ bucket: string; path: string; error: string | null }> = []
-        for (const bucket of DRAWING_BUCKET_CANDIDATES) {
-          for (const path of candidatePaths) {
-            const { data: signedData, error } = await supabase.storage
-              .from(bucket)
-              .createSignedUrl(path, DRAWING_SIGNED_URL_TTL_SECONDS)
-            attempts.push({ bucket, path, error: error?.message ?? null })
-            if (!error) {
-              const signedUrl = signedData?.signedUrl?.trim() ?? ''
-              if (signedUrl) {
-                nextPdfUrl = signedUrl
-                break
-              }
-              attempts[attempts.length - 1]!.error = 'signed URL is empty'
-            }
-          }
-          if (nextPdfUrl) break
-        }
-
-        if (!nextPdfUrl) {
-          setPdfUrl('')
-          setPdfError(
-            `PDF表示失敗: signed URL生成に失敗しました（paths=${candidatePaths.join(' | ')}）`
-          )
-          console.error('pdf signed url create failed for all candidates:', {
-            drawingId: drawing.id,
-            attempts,
-          })
-          return
-        }
-
-        setPdfUrl(nextPdfUrl)
-        setPdfError(null)
-      } catch (error) {
-        console.error('pdf url unexpected error:', {
-          drawingId: drawing.id,
-          bucket: STORAGE_BUCKETS.drawingsPdf,
-          path: resolvedPath.path,
-          storagePathWarning: resolvedPath.warning ?? null,
-          error,
-        })
-        setPdfUrl('')
-        setPdfError('PDF表示失敗: URL生成処理中に予期しないエラーが発生しました')
-      }
-    }
-
-    void resolvePdfUrl()
-  }, [currentDrawing])
+    if (!currentDrawing) return
+    if (pageIndex < currentDrawing.page_count) return
+    setPageIndex(Math.max(currentDrawing.page_count - 1, 0))
+  }, [currentDrawing, pageIndex])
 
   const filteredIssues = useMemo(() => {
     const key = searchText.trim().toLowerCase()
@@ -280,10 +152,10 @@ export default function DrawingEditorClient() {
       issue_type: form.issue_type,
       issue_text: form.issue_text,
       contractor_id: form.contractor_id,
-      pin_x: addingPin.x,
-      pin_y: addingPin.y,
-      callout_x: Math.min(addingPin.x + 0.08, 0.92),
-      callout_y: Math.max(addingPin.y - 0.06, 0.08),
+      x_ratio: addingPin.x,
+      y_ratio: addingPin.y,
+      callout_x_ratio: Math.min(addingPin.x + 0.08, 0.92),
+      callout_y_ratio: Math.max(addingPin.y - 0.06, 0.08),
     }
 
     const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
@@ -306,20 +178,6 @@ export default function DrawingEditorClient() {
     }
   }
 
-  const updateIssue = async (issueId: string, updates: Record<string, unknown>) => {
-    const response = await authedFetch(`/api/issues/${issueId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    })
-    const data = (await response.json()) as { issue?: Issue; error?: string }
-    if (!response.ok || !data.issue) {
-      toast.error(data.error ?? '更新失敗')
-      return
-    }
-    setIssues(issues.map((item) => (item.id === issueId ? data.issue! : item)))
-  }
-
   const deleteIssue = async () => {
     if (!selectedIssueId) return
     const response = await authedFetch(`/api/issues/${selectedIssueId}`, { method: 'DELETE' })
@@ -335,6 +193,20 @@ export default function DrawingEditorClient() {
   }
 
   const issueContractorName = (issue: Issue) => issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? ''
+  const currentPageImageUrl = currentDrawing?.signed_page_urls?.[pageIndex] ?? null
+  const hasNoPageImages = !currentDrawing || !currentDrawing.page_images || currentDrawing.page_images.length === 0
+
+  const handleDrawingClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (mode !== 'add') return
+    const imageElement = imageRef.current
+    if (!imageElement) return
+    const rect = imageElement.getBoundingClientRect()
+    const xRatio = (event.clientX - rect.left) / rect.width
+    const yRatio = (event.clientY - rect.top) / rect.height
+    if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) return
+    setAddingPin({ x: xRatio, y: yRatio })
+    setIssueModalOpen(true)
+  }
 
   return (
     <main className="flex h-screen flex-col bg-slate-50">
@@ -440,47 +312,74 @@ export default function DrawingEditorClient() {
 
         <section className="relative flex-1 overflow-hidden" ref={containerRef}>
           <div className="absolute inset-0 overflow-auto bg-slate-200 p-4">
-            {pdfError ? (
+            {imageError ? (
               <div className="flex h-full items-center justify-center p-6">
                 <Card className="max-w-md">
                   <CardHeader>
-                    <CardTitle>PDF表示エラー</CardTitle>
+                    <CardTitle>画像表示エラー</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-sm text-muted-foreground">{pdfError}</CardContent>
+                  <CardContent className="text-sm text-muted-foreground">{imageError}</CardContent>
                 </Card>
               </div>
-            ) : !pdfUrl ? (
+            ) : hasNoPageImages ? (
               <div className="flex h-full items-center justify-center p-6">
                 <Card className="max-w-md">
                   <CardHeader>
-                    <CardTitle>PDF表示エラー</CardTitle>
+                    <CardTitle>画像変換未完了</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-sm text-muted-foreground">PDF URLの取得に失敗しました</CardContent>
+                  <CardContent className="text-sm text-muted-foreground">
+                    この図面はページ画像が未生成です。再アップロードするか、変換処理ログを確認してください。
+                  </CardContent>
+                </Card>
+              </div>
+            ) : !currentPageImageUrl ? (
+              <div className="flex h-full items-center justify-center p-6">
+                <Card className="max-w-md">
+                  <CardHeader>
+                    <CardTitle>画像表示エラー</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">
+                    ページ画像URLの取得に失敗しました。Storage設定と署名URL生成を確認してください。
+                  </CardContent>
                 </Card>
               </div>
             ) : (
               <div className="flex min-h-full items-center justify-center">
-                <div className="bg-white p-2 shadow">
-                  <Document
-                    file={pdfUrl}
-                    loading={<p className="p-4 text-sm text-muted-foreground">PDF読込中...</p>}
-                    onLoadSuccess={() => {
-                      console.log('pdf loaded')
-                      setPdfError(null)
-                    }}
-                    onLoadError={(error) => {
-                      console.error('pdf load error:', error)
-                      setPdfError('PDFを表示できません。図面ファイルまたはアクセス権限を確認してください。')
-                    }}
+                <div
+                  className="relative overflow-hidden bg-white p-2 shadow"
+                  style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+                  onClick={handleDrawingClick}
+                >
+                  <img
+                    ref={imageRef}
+                    src={currentPageImageUrl}
+                    alt={`図面 ${pageIndex + 1}ページ`}
+                    className="block max-w-[1200px] select-none"
+                    draggable={false}
+                    onLoad={() => setImageError(null)}
+                    onError={() =>
+                      setImageError('図面画像を表示できません。画像ファイルまたはアクセス権限を確認してください。')
+                    }
                   >
-                    <Page
-                      pageNumber={1}
-                      width={Math.max(280, Math.min(viewportSize.width - 32, 1200))}
-                      scale={zoom}
-                      renderAnnotationLayer={false}
-                      renderTextLayer={false}
-                    />
-                  </Document>
+                  </img>
+                  <div className="pointer-events-none absolute inset-0">
+                    {pageIssues.map((issue) => (
+                      <button
+                        key={issue.id}
+                        type="button"
+                        className={`pointer-events-auto absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white text-xs font-bold text-white ${
+                          selectedIssueId === issue.id ? 'bg-red-600 ring-2 ring-red-300' : 'bg-blue-600'
+                        }`}
+                        style={{ left: `${issue.pin_x * 100}%`, top: `${issue.pin_y * 100}%` }}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          jumpToIssue(issue)
+                        }}
+                      >
+                        {issue.no}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}

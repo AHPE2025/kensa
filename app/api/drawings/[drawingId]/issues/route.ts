@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
-import { STORAGE_BUCKETS } from '@/lib/storage'
+import { DRAWING_IMAGES_BUCKET, DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
 
@@ -25,10 +25,11 @@ export async function GET(request: NextRequest, { params }: Params) {
   } else if (drawing) {
     console.info('drawing record resolved for editor:', {
       drawingId: drawing.id,
-      fileName: drawing.file_name ?? drawing.file_path?.split('/').pop() ?? null,
+      fileName: drawing.file_name ?? null,
       filePath: drawing.file_path ?? null,
-      storagePath: drawing.storage_path ?? drawing.file_path ?? null,
-      bucket: STORAGE_BUCKETS.drawingsPdf,
+      storagePath: drawing.storage_path ?? drawing.original_pdf_path ?? drawing.file_path ?? null,
+      imageCount: Array.isArray(drawing.page_images) ? drawing.page_images.length : 0,
+      bucket: DRAWING_IMAGES_BUCKET,
     })
   }
 
@@ -47,11 +48,24 @@ export async function GET(request: NextRequest, { params }: Params) {
     })
     return NextResponse.json({ drawing: drawing ?? null, issues: [] })
   }
+
+  const pageImages = drawing && Array.isArray(drawing.page_images) ? (drawing.page_images as string[]) : []
+  const signedPageUrls = await Promise.all(
+    pageImages.map(async (path) => {
+      const { data } = await client.storage
+        .from(DRAWING_IMAGES_BUCKET)
+        .createSignedUrl(path, DRAWING_SIGNED_URL_TTL_SECONDS)
+      return data?.signedUrl ?? null
+    })
+  )
   const drawingWithStoragePath = drawing
     ? {
         ...drawing,
-        storage_path: drawing.storage_path ?? drawing.file_path ?? null,
-        file_name: drawing.file_name ?? drawing.file_path?.split('/').pop() ?? null,
+        storage_path: drawing.storage_path ?? drawing.original_pdf_path ?? drawing.file_path ?? null,
+        original_pdf_path: drawing.original_pdf_path ?? drawing.file_path ?? null,
+        page_images: pageImages,
+        signed_page_urls: signedPageUrls,
+        file_name: drawing.file_name ?? null,
       }
     : null
   return NextResponse.json({ drawing: drawingWithStoragePath, issues: issues ?? [] })
@@ -65,6 +79,10 @@ export async function POST(request: NextRequest, { params }: Params) {
   const body = (await request.json()) as {
     page_index?: number
     floor_label?: string
+    x_ratio?: number
+    y_ratio?: number
+    callout_x_ratio?: number
+    callout_y_ratio?: number
     pin_x?: number
     pin_y?: number
     callout_x?: number
@@ -88,10 +106,10 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   if (
     body.page_index === undefined ||
-    body.pin_x === undefined ||
-    body.pin_y === undefined ||
-    body.callout_x === undefined ||
-    body.callout_y === undefined ||
+    (body.pin_x === undefined && body.x_ratio === undefined) ||
+    (body.pin_y === undefined && body.y_ratio === undefined) ||
+    (body.callout_x === undefined && body.callout_x_ratio === undefined) ||
+    (body.callout_y === undefined && body.callout_y_ratio === undefined) ||
     !body.issue_type ||
     !body.issue_text ||
     !body.contractor_id
@@ -107,10 +125,10 @@ export async function POST(request: NextRequest, { params }: Params) {
       drawing_id: drawingId,
       page_index: body.page_index,
       floor_label: body.floor_label ?? drawing.floor_label,
-      pin_x: body.pin_x,
-      pin_y: body.pin_y,
-      callout_x: body.callout_x,
-      callout_y: body.callout_y,
+      pin_x: body.pin_x ?? body.x_ratio,
+      pin_y: body.pin_y ?? body.y_ratio,
+      callout_x: body.callout_x ?? body.callout_x_ratio,
+      callout_y: body.callout_y ?? body.callout_y_ratio,
       issue_type: body.issue_type,
       issue_text: body.issue_text,
       contractor_id: body.contractor_id,
