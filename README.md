@@ -5,7 +5,6 @@
 ## 技術スタック
 
 - Next.js App Router + TypeScript + shadcn/ui
-- pdfjs-dist
 - react-konva + konva
 - zustand
 - Supabase (Postgres/Auth/Storage)
@@ -26,7 +25,7 @@
    - `supabase/schema.sql`
    - `supabase/policies.sql`
    - 必要に応じて `supabase/seed.sql`
-4. `drawings-pdf` と `exports-pdf` バケットが作成されていることを確認
+4. `drawings-pdf` `drawings-images` `exports-pdf` バケットが作成されていることを確認
 
 ## 環境変数
 
@@ -76,11 +75,11 @@ docker compose up --build
 - 初回ログイン時に `/api/profile/bootstrap` で tenant/profile を自動作成
 - `/projects` で案件作成・検索・一覧
 - `/projects/[id]`
-  - 図面タブ: PDFアップロード、ページ数取得、図面一覧
+  - 図面タブ: PDFアップロード、ページ画像生成、図面一覧
   - 業者タブ: 追加/編集/削除
   - 出力タブ: 業者選択、階フィルタ、PDF出力
 - `/projects/[id]/drawings/[drawingId]`
-  - pdf.js描画 + Konva注記レイヤ
+  - ページ画像描画 + 注記レイヤ
   - モード切替(移動/追加/編集)
   - 指摘モーダル(階数/区分/内容/担当業者)
   - 指摘一覧、検索、業者フィルタ、ジャンプ、ドラッグ更新、削除

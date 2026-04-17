@@ -37,9 +37,16 @@ create table if not exists public.drawings (
   project_id uuid not null references public.projects(id) on delete cascade,
   floor_label text not null,
   file_path text not null,
+  original_pdf_path text,
+  page_images text[] not null default '{}',
+  file_name text,
   page_count int not null check (page_count > 0),
   created_at timestamptz not null default now()
 );
+
+alter table public.drawings add column if not exists original_pdf_path text;
+alter table public.drawings add column if not exists page_images text[] not null default '{}';
+alter table public.drawings add column if not exists file_name text;
 
 create table if not exists public.issues (
   id uuid primary key default gen_random_uuid(),
@@ -76,6 +83,10 @@ create index if not exists issues_drawing_page_idx on public.issues(drawing_id, 
 
 insert into storage.buckets (id, name, public)
 values ('drawings-pdf', 'drawings-pdf', false)
+on conflict (id) do nothing;
+
+insert into storage.buckets (id, name, public)
+values ('drawings-images', 'drawings-images', false)
 on conflict (id) do nothing;
 
 insert into storage.buckets (id, name, public)

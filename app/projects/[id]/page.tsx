@@ -101,31 +101,13 @@ export default function ProjectDetailPage() {
     if (user) void loadAll()
   }, [user, projectId])
 
-  const getPdfPageCount = async (target: File) => {
-    try {
-      const pdfjsLib = await import('pdfjs-dist')
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.mjs',
-        import.meta.url
-      ).toString()
-      const bytes = await target.arrayBuffer()
-      const doc = await pdfjsLib.getDocument({ data: bytes }).promise
-      return doc.numPages
-    } catch (error) {
-      console.error('pdf page count error:', error)
-      return 1
-    }
-  }
-
   const onUpload = async (event: FormEvent) => {
     event.preventDefault()
     if (!file || !floorLabel.trim()) return
     setUploading(true)
     try {
-      const pageCount = await getPdfPageCount(file)
       const form = new FormData()
       form.set('floorLabel', floorLabel.trim())
-      form.set('pageCount', String(pageCount))
       form.set('file', file)
 
       const response = await authedFetch(`/api/projects/${projectId}/drawings`, {
@@ -143,7 +125,7 @@ export default function ProjectDetailPage() {
       setFile(null)
       await loadAll()
     } catch (error) {
-      console.error('pdf page count error:', error)
+      console.error('drawing upload error:', error)
       toast.error('PDFアップロードに失敗しました')
     } finally {
       setUploading(false)

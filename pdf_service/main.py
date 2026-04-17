@@ -63,6 +63,11 @@ class GeneratePayload(BaseModel):
   generated_at: str
 
 
+class RenderPagesPayload(BaseModel):
+  pdf_file_base64: str
+  dpi: int = Field(default=160, ge=96, le=300)
+
+
 def build_styles():
   sample = getSampleStyleSheet()
   return {
@@ -164,6 +169,16 @@ def to_png_bytes_from_pdf_page(pdf64: str, page_index: int) -> bytes:
   return buffer.getvalue()
 
 
+def render_pdf_to_png_base64_list(pdf_bytes: bytes, dpi: int) -> list[str]:
+  images = convert_from_bytes(pdf_bytes, dpi=dpi)
+  encoded: list[str] = []
+  for image in images:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    encoded.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
+  return encoded
+
+
 def build_pdf(payload: GeneratePayload) -> bytes:
   styles = build_styles()
   output = io.BytesIO()
@@ -248,3 +263,13 @@ def generate(payload: GeneratePayload):
   except Exception as exc:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
   return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+@app.post("/render-pages")
+def render_pages(payload: RenderPagesPayload):
+  try:
+    pdf_bytes = base64.b64decode(payload.pdf_file_base64)
+    images_base64 = render_pdf_to_png_base64_list(pdf_bytes, payload.dpi)
+  except Exception as exc:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+  return {"page_count": len(images_base64), "images_base64": images_base64}

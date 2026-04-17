@@ -80,3 +80,15 @@ with check (
   bucket_id = 'exports-pdf'
   and (storage.foldername(name))[1] = public.current_tenant_id()::text
 );
+
+drop policy if exists "drawings_images_rw_tenant" on storage.objects;
+create policy "drawings_images_rw_tenant" on storage.objects
+for all to authenticated
+using (
+  bucket_id = 'drawings-images'
+  and (storage.foldername(name))[1] = public.current_tenant_id()::text
+)
+with check (
+  bucket_id = 'drawings-images'
+  and (storage.foldername(name))[1] = public.current_tenant_id()::text
+);

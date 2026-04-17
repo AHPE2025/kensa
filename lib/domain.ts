@@ -37,6 +37,8 @@ export type Drawing = {
   file_path: string
   storage_path?: string | null
   file_name?: string | null
+  original_pdf_path?: string | null
+  page_images?: string[] | null
   page_count: number
   created_at: string
 }

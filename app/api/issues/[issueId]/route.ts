@@ -26,6 +26,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   for (const key of allowed) {
     if (key in body) updates[key] = body[key]
   }
+  if ('x_ratio' in body) updates.pin_x = body.x_ratio
+  if ('y_ratio' in body) updates.pin_y = body.y_ratio
+  if ('callout_x_ratio' in body) updates.callout_x = body.callout_x_ratio
+  if ('callout_y_ratio' in body) updates.callout_y = body.callout_y_ratio
 
   const { data, error } = await client
     .from('issues')
