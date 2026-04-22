@@ -82,13 +82,75 @@ export async function POST(request: NextRequest, { params }: Params) {
   const { client: userClient, user } = authed
   const { id: projectId } = await params
 
-  const form = await request.formData()
-  const floorLabel = String(form.get('floorLabel') ?? '').trim() || '未設定'
+  console.log('drawings upload request received:', {
+    projectId,
+    userId: user.id,
+    method: request.method,
+    url: request.url,
+    contentType: request.headers.get('content-type') ?? null,
+  })
+
+  let form: FormData
+  try {
+    form = await request.formData()
+  } catch (error) {
+    console.error('drawings upload formData parse error:', {
+      projectId,
+      userId: user.id,
+      error,
+      stack: error instanceof Error ? error.stack : null,
+    })
+    return NextResponse.json({ error: 'invalid multipart/form-data payload' }, { status: 400 })
+  }
+  const formKeys = Array.from(form.keys())
+  const floorLabel = String(form.get('floorLabel') ?? '').trim()
   const file = form.get('file')
+  const fileMeta =
+    file instanceof File
+      ? {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          lastModified: file.lastModified,
+        }
+      : {
+          valueType: file === null ? 'null' : typeof file,
+        }
+  console.log('drawings upload formData parsed:', {
+    projectId,
+    userId: user.id,
+    formKeys,
+    hasFile: file instanceof File,
+    hasFloorLabel: floorLabel.length > 0,
+    floorLabel,
+    fileMeta,
+  })
 
   if (!(file instanceof File)) {
-    console.error('drawings upload error:', { projectId, userId: user.id, reason: 'file is missing' })
-    return NextResponse.json({ error: 'file が必須です' }, { status: 400 })
+    console.error('drawings upload validation failed:', { projectId, userId: user.id, reason: 'file is required' })
+    return NextResponse.json({ error: 'file is required' }, { status: 400 })
+  }
+  if (!floorLabel) {
+    console.error('drawings upload validation failed:', { projectId, userId: user.id, reason: 'floor is required' })
+    return NextResponse.json({ error: 'floor is required' }, { status: 400 })
+  }
+  if (file.type !== 'application/pdf') {
+    console.error('drawings upload validation failed:', {
+      projectId,
+      userId: user.id,
+      reason: 'invalid file type',
+      fileType: file.type,
+    })
+    return NextResponse.json({ error: 'invalid file type' }, { status: 400 })
+  }
+  if (file.size <= 0) {
+    console.error('drawings upload validation failed:', {
+      projectId,
+      userId: user.id,
+      reason: 'empty file',
+      fileSize: file.size,
+    })
+    return NextResponse.json({ error: 'invalid file size' }, { status: 400 })
   }
 
   const { data: profile, error: profileError } = await userClient
@@ -118,78 +180,128 @@ export async function POST(request: NextRequest, { params }: Params) {
       profileTenantId: profile?.tenant_id ?? null,
       projectTenantId: project?.tenant_id ?? null,
     })
-    return NextResponse.json({ error: 'tenant_id を特定できませんでした' }, { status: 400 })
+    return NextResponse.json({ error: 'tenant_id could not be resolved' }, { status: 400 })
   }
 
   const baseName = toAsciiFileName(file.name.replace(/\.pdf$/i, ''))
   const bytes = Buffer.from(await file.arrayBuffer())
+  console.log('drawings upload file accepted:', {
+    projectId,
+    userId: user.id,
+    tenantId,
+    floorLabel,
+    bytesLength: bytes.length,
+    fileName: file.name,
+    mimeType: file.type,
+  })
   const savedFileName = `${Date.now()}_${baseName}.pdf`
   const drawingId = crypto.randomUUID()
   const originalPdfPath = `${tenantId}/${projectId}/original/${savedFileName}`
 
   const pdfServiceUrl = process.env.PDF_SERVICE_URL
-  if (!pdfServiceUrl) {
-    return NextResponse.json({ error: 'PDF_SERVICE_URL is missing' }, { status: 500 })
-  }
-  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production'
-  let pdfServiceHost = ''
-  try {
-    pdfServiceHost = new URL(pdfServiceUrl).hostname.toLowerCase()
-  } catch {
-    return NextResponse.json({ error: `Invalid PDF_SERVICE_URL: ${pdfServiceUrl}` }, { status: 500 })
-  }
-  if (isProduction && ['localhost', '127.0.0.1', '::1'].includes(pdfServiceHost)) {
-    return NextResponse.json(
-      { error: `PDF_SERVICE_URL cannot use localhost in production: ${pdfServiceUrl}` },
-      { status: 500 }
-    )
-  }
-
-  const renderUrl = `${pdfServiceUrl.replace(/\/$/, '')}/render-pages`
-  let renderResponse: Response
-  let renderText = ''
-  try {
-    renderResponse = await fetch(renderUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pdf_file_base64: bytes.toString('base64'),
-      }),
+  const shouldSkipPdfConversion = !pdfServiceUrl || pdfServiceUrl.includes('ngrok')
+  if (shouldSkipPdfConversion) {
+    console.log('PDF conversion skipped because PDF_SERVICE_URL is missing or uses ngrok', {
+      projectId,
+      userId: user.id,
+      pdfServiceUrl: pdfServiceUrl ?? null,
     })
-    renderText = await renderResponse.text()
-  } catch {
-    return NextResponse.json({ error: 'PDF画像化サービスに接続できませんでした' }, { status: 502 })
   }
-  let renderPayload: {
-    page_count?: number
-    images_base64?: string[]
-    detail?: string
-  }
-  try {
-    renderPayload = (renderText ? JSON.parse(renderText) : {}) as {
+  let pageCount = 0
+  let pageImagesBase64: string[] = []
+  if (!shouldSkipPdfConversion) {
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production'
+    let pdfServiceHost = ''
+    try {
+      pdfServiceHost = new URL(pdfServiceUrl).hostname.toLowerCase()
+    } catch {
+      return NextResponse.json({ error: `Invalid PDF_SERVICE_URL: ${pdfServiceUrl}` }, { status: 500 })
+    }
+    if (isProduction && ['localhost', '127.0.0.1', '::1'].includes(pdfServiceHost)) {
+      console.error('drawings upload pdf service configuration error:', {
+        projectId,
+        userId: user.id,
+        pdfServiceUrl,
+        vercelEnv: process.env.VERCEL_ENV ?? null,
+      })
+      return NextResponse.json(
+        { error: `PDF_SERVICE_URL cannot use localhost in production: ${pdfServiceUrl}` },
+        { status: 500 }
+      )
+    }
+
+    const renderUrl = `${pdfServiceUrl.replace(/\/$/, '')}/render-pages`
+    let renderResponse: Response
+    let renderText = ''
+    console.log('drawings pdf conversion start:', {
+      projectId,
+      userId: user.id,
+      renderUrl,
+      sourceFileName: file.name,
+      sourceFileSize: file.size,
+    })
+    try {
+      renderResponse = await fetch(renderUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdf_file_base64: bytes.toString('base64'),
+        }),
+      })
+      renderText = await renderResponse.text()
+    } catch (error) {
+      console.error('drawings pdf conversion request failed:', {
+        projectId,
+        userId: user.id,
+        renderUrl,
+        error,
+        stack: error instanceof Error ? error.stack : null,
+      })
+      return NextResponse.json({ error: 'pdf conversion failed' }, { status: 400 })
+    }
+    let renderPayload: {
       page_count?: number
       images_base64?: string[]
       detail?: string
     }
-  } catch {
-    renderPayload = {}
-  }
-  const convertedPageCount = Number(renderPayload.page_count ?? renderPayload.images_base64?.length ?? 0)
-  console.log('drawings render-pages result:', {
-    requestUrl: renderUrl,
-    status: renderResponse.status,
-    responseBody: renderText,
-    convertedPageCount,
-  })
-  if (!renderResponse.ok || !Array.isArray(renderPayload.images_base64) || renderPayload.images_base64.length === 0) {
-    return NextResponse.json(
-      { error: renderPayload.detail ?? 'PDFを画像化できませんでした' },
-      { status: 400 }
-    )
-  }
+    try {
+      renderPayload = (renderText ? JSON.parse(renderText) : {}) as {
+        page_count?: number
+        images_base64?: string[]
+        detail?: string
+      }
+    } catch {
+      renderPayload = {}
+    }
+    const convertedPageCount = Number(renderPayload.page_count ?? renderPayload.images_base64?.length ?? 0)
+    console.log('drawings render-pages result:', {
+      requestUrl: renderUrl,
+      status: renderResponse.status,
+      responseBody: renderText,
+      convertedPageCount,
+    })
+    if (!renderResponse.ok || !Array.isArray(renderPayload.images_base64) || renderPayload.images_base64.length === 0) {
+      console.error('drawings pdf conversion failed:', {
+        projectId,
+        userId: user.id,
+        status: renderResponse.status,
+        detail: renderPayload.detail ?? null,
+        responseBody: renderText,
+      })
+      return NextResponse.json(
+        { error: renderPayload.detail ?? 'pdf conversion failed' },
+        { status: 400 }
+      )
+    }
 
-  const pageCount = Number(renderPayload.page_count ?? renderPayload.images_base64.length ?? 0)
-  const pageImagesBase64 = renderPayload.images_base64
+    pageCount = Number(renderPayload.page_count ?? renderPayload.images_base64.length ?? 0)
+    pageImagesBase64 = renderPayload.images_base64
+    console.log('drawings pdf conversion success:', {
+      projectId,
+      userId: user.id,
+      pageCount,
+    })
+  }
 
   const { error: uploadError } = await serviceClient.storage
     .from(DRAWINGS_PDF_BUCKET)
@@ -216,11 +328,20 @@ export async function POST(request: NextRequest, { params }: Params) {
       .from(DRAWING_IMAGES_BUCKET)
       .upload(imagePath, imageBytes, { contentType: 'image/png', upsert: false })
     if (imageUploadError) {
-      return NextResponse.json({ error: imageUploadError.message }, { status: 400 })
+      console.error('drawings page image upload error:', {
+        projectId,
+        userId: user.id,
+        tenantId,
+        drawingId,
+        imagePath,
+        pageLabel,
+        error: imageUploadError,
+      })
+      return NextResponse.json({ error: `page image upload failed: ${imageUploadError.message}` }, { status: 400 })
     }
     pageImagePaths.push(imagePath)
   }
-  if (pageImagePaths.length === 0 || pageCount <= 0) {
+  if (!shouldSkipPdfConversion && (pageImagePaths.length === 0 || pageCount <= 0)) {
     return NextResponse.json({ error: '画像変換結果が不正です' }, { status: 400 })
   }
 
@@ -261,6 +382,14 @@ export async function POST(request: NextRequest, { params }: Params) {
       error,
     })
     return NextResponse.json({ error: error.message }, { status: 400 })
+  }
+  if (shouldSkipPdfConversion) {
+    return NextResponse.json({
+      success: true,
+      skip: true,
+      message: 'PDF画像化は一時スキップしました',
+      drawing: data,
+    })
   }
   return NextResponse.json({ drawing: data })
 }

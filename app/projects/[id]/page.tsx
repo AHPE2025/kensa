@@ -103,15 +103,25 @@ export default function ProjectDetailPage() {
 
   const onUpload = async (event: FormEvent) => {
     event.preventDefault()
-    if (!file || !floorLabel.trim()) return
+    const trimmedFloorLabel = floorLabel.trim()
+    if (!file || !trimmedFloorLabel) return
     setUploading(true)
     try {
       const form = new FormData()
-      form.set('floorLabel', floorLabel.trim())
+      form.set('floorLabel', trimmedFloorLabel)
       form.set('file', file)
+
+      const formKeys = Array.from(form.keys())
+      console.log('sending drawing upload', { projectId })
+      console.log('formData keys:', formKeys)
+      console.log('file.name:', file.name)
+      console.log('file.type:', file.type)
+      console.log('file.size:', file.size)
+      console.log('floor:', trimmedFloorLabel)
 
       const response = await authedFetch(`/api/projects/${projectId}/drawings`, {
         method: 'POST',
+        // FormData の場合は Content-Type を手動設定しない（boundary が壊れるため）
         body: form,
       })
       const data = (await response.json()) as { error?: string }
