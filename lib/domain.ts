@@ -65,7 +65,7 @@ export type Issue = {
   callout_y: number
   issue_type: IssueType
   issue_text: string
-  contractor_id: string
+  contractor_id: string | null
   status: string
   created_by: string
   created_at: string

@@ -95,9 +95,13 @@ export async function POST(request: NextRequest, { params }: Params) {
     callout_y?: number
     issue_type?: string
     issue_text?: string
-    contractor_id?: string
+    contractor_id?: string | null
     status?: string
+    tenant_id?: string
+    project_id?: string
+    drawing_id?: string
   }
+  console.log('issue request body:', body)
 
   const { data: drawing, error: drawingError } = await client
     .from('drawings')
@@ -110,18 +114,29 @@ export async function POST(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: 'drawing が見つかりません' }, { status: 404 })
   }
 
-  if (
-    body.page_index === undefined ||
-    (body.pin_x === undefined && body.x_ratio === undefined) ||
-    (body.pin_y === undefined && body.y_ratio === undefined) ||
-    (body.callout_x === undefined && body.callout_x_ratio === undefined) ||
-    (body.callout_y === undefined && body.callout_y_ratio === undefined) ||
-    !body.issue_type ||
-    !body.issue_text ||
-    !body.contractor_id
-  ) {
-    return NextResponse.json({ error: '必須項目が不足しています' }, { status: 400 })
+  const resolvedPinX = body.pin_x ?? body.x_ratio
+  const resolvedPinY = body.pin_y ?? body.y_ratio
+  const issueType = body.issue_type?.trim()
+  const issueText = body.issue_text?.trim()
+
+  const missing: string[] = []
+  if (resolvedPinX === undefined) missing.push('pin_x')
+  if (resolvedPinY === undefined) missing.push('pin_y')
+  if (!issueType) missing.push('issue_type')
+  if (!issueText) missing.push('issue_text')
+
+  if (missing.length > 0) {
+    return NextResponse.json(
+      { error: '必須項目が不足しています', missing },
+      { status: 400 },
+    )
   }
+
+  const resolvedPageIndex = body.page_index ?? 0
+  const resolvedFloorLabel = body.floor_label?.trim() || drawing.floor_label
+  const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? (resolvedPinX + 0.05)
+  const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? (resolvedPinY - 0.05)
+  const resolvedContractorId = body.contractor_id && body.contractor_id.trim() ? body.contractor_id : null
 
   const { data, error } = await client
     .from('issues')
@@ -129,15 +144,15 @@ export async function POST(request: NextRequest, { params }: Params) {
       tenant_id: tenantId,
       project_id: drawing.project_id,
       drawing_id: drawingId,
-      page_index: body.page_index,
-      floor_label: body.floor_label ?? drawing.floor_label,
-      pin_x: body.pin_x ?? body.x_ratio,
-      pin_y: body.pin_y ?? body.y_ratio,
-      callout_x: body.callout_x ?? body.callout_x_ratio,
-      callout_y: body.callout_y ?? body.callout_y_ratio,
-      issue_type: body.issue_type,
-      issue_text: body.issue_text,
-      contractor_id: body.contractor_id,
+      page_index: resolvedPageIndex,
+      floor_label: resolvedFloorLabel,
+      pin_x: resolvedPinX,
+      pin_y: resolvedPinY,
+      callout_x: resolvedCalloutX,
+      callout_y: resolvedCalloutY,
+      issue_type: issueType,
+      issue_text: issueText,
+      contractor_id: resolvedContractorId,
       status: body.status ?? 'open',
       created_by: user.id,
     })

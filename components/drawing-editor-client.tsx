@@ -1,9 +1,10 @@
 'use client'
 
-import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Download, Filter, MapPin, Move, Pencil, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { ArrowLeft, Download, Filter, MapPin, Move, Pencil, RotateCcw, RotateCw, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
 import { Document, Page, pdfjs } from 'react-pdf'
+import { Layer, Stage, Text as KonvaText, Circle as KonvaCircle } from 'react-konva'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -27,6 +28,14 @@ type IssueForm = {
   issue_type: string
   issue_text: string
   contractor_id: string
+}
+
+type IssueResponse = {
+  drawing?: DrawingRow
+  issues?: Issue[]
+  issue?: Issue
+  error?: string
+  missing?: string[]
 }
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
@@ -57,6 +66,9 @@ export default function DrawingEditorClient() {
   const [pageIndex, setPageIndex] = useState(0)
   const [imageError, setImageError] = useState<string | null>(null)
   const [pdfPageCount, setPdfPageCount] = useState(0)
+  const [rotation, setRotation] = useState(0)
+  const [fitScale, setFitScale] = useState(1)
+  const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
   const [saveAndContinue, setSaveAndContinue] = useState(false)
@@ -74,39 +86,55 @@ export default function DrawingEditorClient() {
     if (!loadingAuth && !user) router.replace('/login')
   }, [loadingAuth, user, router])
 
-  const loadData = async () => {
-    const [drawingListRes, contractorRes, issueRes] = await Promise.all([
-      authedFetch(`/api/projects/${projectId}/drawings`),
-      authedFetch(`/api/projects/${projectId}/contractors`),
-      authedFetch(`/api/drawings/${drawingId}/issues`),
-    ])
-
-    const drawingListData = (await drawingListRes.json()) as { drawings?: DrawingRow[]; error?: string }
-    const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
-    const issueData = (await issueRes.json()) as { drawing?: DrawingRow; issues?: Issue[]; error?: string }
-
-    if (!drawingListRes.ok) return toast.error(drawingListData.error ?? '図面取得失敗')
-    if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
-    if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
-
-    setDrawings(drawingListData.drawings ?? [])
-    const drawingFromList = (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
-    const drawing = issueData.drawing
-      ? {
-          ...drawingFromList,
-          ...issueData.drawing,
-          storage_path: issueData.drawing.storage_path ?? issueData.drawing.file_path ?? null,
-        }
-      : drawingFromList
-    setCurrentDrawing(drawing)
-    setContractors(contractorData.contractors ?? [])
-    setIssues(issueData.issues ?? [])
-    setPageIndex(0)
-    if (drawing) {
-      setForm((prev) => ({ ...prev, floor_label: drawing.floor_label }))
+  const refetchIssues = async () => {
+    const issueRes = await authedFetch(`/api/drawings/${drawingId}/issues`)
+    const issueData = (await issueRes.json()) as IssueResponse
+    if (!issueRes.ok) {
+      console.error('create issue error:', issueData.error ?? '指摘再取得失敗')
+      return false
     }
-    if (!form.contractor_id && contractorData.contractors?.length) {
-      setForm((prev) => ({ ...prev, contractor_id: contractorData.contractors![0].id }))
+    setIssues(issueData.issues ?? [])
+    return true
+  }
+
+  const loadData = async () => {
+    try {
+      const [drawingListRes, contractorRes, issueRes] = await Promise.all([
+        authedFetch(`/api/projects/${projectId}/drawings`),
+        authedFetch(`/api/projects/${projectId}/contractors`),
+        authedFetch(`/api/drawings/${drawingId}/issues`),
+      ])
+
+      const drawingListData = (await drawingListRes.json()) as { drawings?: DrawingRow[]; error?: string }
+      const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
+      const issueData = (await issueRes.json()) as { drawing?: DrawingRow; issues?: Issue[]; error?: string }
+
+      if (!drawingListRes.ok) return toast.error(drawingListData.error ?? '図面取得失敗')
+      if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
+      if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
+
+      const contractors = contractorData.contractors ?? []
+      console.log("contractors:", contractors)
+
+      setDrawings(drawingListData.drawings ?? [])
+      const drawingFromList = (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
+      const drawing = issueData.drawing
+        ? {
+            ...drawingFromList,
+            ...issueData.drawing,
+            storage_path: issueData.drawing.storage_path ?? issueData.drawing.file_path ?? null,
+          }
+        : drawingFromList
+      setCurrentDrawing(drawing)
+      setContractors(contractors)
+      setIssues(issueData.issues ?? [])
+      setPageIndex(0)
+      if (drawing) {
+        setForm((prev) => ({ ...prev, floor_label: drawing.floor_label }))
+      }
+    } catch (error) {
+      console.error("contractors load error:", error)
+      toast.error('業者取得失敗')
     }
   }
 
@@ -115,8 +143,15 @@ export default function DrawingEditorClient() {
   }, [user, drawingId, projectId])
 
   useEffect(() => {
+    if (contractorFilter === 'all') return
+    if (contractors.some((contractor) => contractor.id === contractorFilter)) return
+    setContractorFilter('all')
+  }, [contractors, contractorFilter, setContractorFilter])
+
+  useEffect(() => {
     setZoom(1)
     setPan({ x: 0, y: 0 })
+    setRotation(0)
   }, [drawingId, setZoom, setPan])
 
   useEffect(() => {
@@ -125,6 +160,10 @@ export default function DrawingEditorClient() {
     if (pageIndex < totalPages) return
     setPageIndex(Math.max(totalPages - 1, 0))
   }, [currentDrawing, pageIndex, pdfPageCount])
+
+  useEffect(() => {
+    console.log("rotation:", rotation)
+  }, [rotation])
 
   const filteredIssues = useMemo(() => {
     const key = searchText.trim().toLowerCase()
@@ -150,35 +189,47 @@ export default function DrawingEditorClient() {
   const onSaveIssue = async (event: FormEvent) => {
     event.preventDefault()
     if (!addingPin) return
-    const payload = {
-      page_index: pageIndex,
-      floor_label: form.floor_label,
-      issue_type: form.issue_type,
-      issue_text: form.issue_text,
-      contractor_id: form.contractor_id,
-      x_ratio: addingPin.x,
-      y_ratio: addingPin.y,
-      callout_x_ratio: Math.min(addingPin.x + 0.08, 0.92),
-      callout_y_ratio: Math.max(addingPin.y - 0.06, 0.08),
-    }
+    try {
+      const payload = {
+        page_index: pageIndex,
+        floor_label: form.floor_label || currentDrawing?.floor_label,
+        issue_type: form.issue_type,
+        issue_text: form.issue_text.trim(),
+        contractor_id: form.contractor_id || null,
+        pin_x: addingPin.x,
+        pin_y: addingPin.y,
+      }
+      console.log('issue payload:', payload)
 
-    const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    const data = (await response.json()) as { issue?: Issue; error?: string }
-    if (!response.ok || !data.issue) {
-      toast.error(data.error ?? '保存失敗')
-      return
-    }
-    setIssues([...issues, data.issue])
-    setForm((prev) => ({ ...prev, issue_text: '' }))
-    setAddingPin(null)
-    setIssueModalOpen(false)
-    toast.success('指摘を保存しました')
-    if (saveAndContinue) {
-      setMode('add')
+      const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = (await response.json()) as IssueResponse
+      if (!response.ok || !data.issue) {
+        const errorMessage = Array.isArray(data.missing) && data.missing.length > 0
+          ? `${data.error ?? '保存失敗'}: ${data.missing.join(', ')}`
+          : data.error ?? '保存失敗'
+        console.error('create issue error:', data)
+        toast.error(errorMessage)
+        return
+      }
+
+      const refreshed = await refetchIssues()
+      if (!refreshed) {
+        setIssues([...issues, data.issue])
+      }
+      setForm((prev) => ({ ...prev, issue_text: '' }))
+      setAddingPin(null)
+      setIssueModalOpen(false)
+      toast.success('指摘を保存しました')
+      if (saveAndContinue) {
+        setMode('add')
+      }
+    } catch (error) {
+      console.error('create issue error:', error)
+      toast.error('保存失敗')
     }
   }
 
@@ -199,16 +250,58 @@ export default function DrawingEditorClient() {
   const issueContractorName = (issue: Issue) => issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? ''
   const pdfUrl = currentDrawing?.signed_url ?? null
   const totalPages = Math.max(pdfPageCount, currentDrawing?.page_count ?? 0, 1)
+  const renderWidth = 1100
+  const pageAspect = pageSize ? pageSize.height / pageSize.width : 1.4142
+  const basePageWidth = renderWidth
+  const basePageHeight = renderWidth * pageAspect
+  const isQuarterTurn = rotation % 180 !== 0
+  const stageWidth = isQuarterTurn ? basePageHeight : basePageWidth
+  const stageHeight = isQuarterTurn ? basePageWidth : basePageHeight
+  const effectiveScale = zoom * fitScale
 
-  const handleDrawingClick = (event: MouseEvent<HTMLDivElement>) => {
+  const recalculateFitScale = useCallback(() => {
+    const container = containerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const availableWidth = Math.max(rect.width - 48, 1)
+    const availableHeight = Math.max(rect.height - 48, 1)
+    const nextFitScale = Math.min(availableWidth / stageWidth, availableHeight / stageHeight)
+    if (Number.isFinite(nextFitScale) && nextFitScale > 0) {
+      setFitScale(nextFitScale)
+    }
+  }, [stageHeight, stageWidth])
+
+  useEffect(() => {
+    recalculateFitScale()
+    const onWindowResize = () => recalculateFitScale()
+    window.addEventListener('resize', onWindowResize)
+    const container = containerRef.current
+    if (!container || typeof ResizeObserver === 'undefined') {
+      return () => {
+        window.removeEventListener('resize', onWindowResize)
+      }
+    }
+
+    const observer = new ResizeObserver(() => recalculateFitScale())
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', onWindowResize)
+    }
+  }, [recalculateFitScale])
+
+  const handleStageClick = useCallback((event: { target: { getStage: () => { getPointerPosition: () => { x: number; y: number } | null } | null } }) => {
     if (mode !== 'add') return
-    const rect = event.currentTarget.getBoundingClientRect()
-    const xRatio = (event.clientX - rect.left) / rect.width
-    const yRatio = (event.clientY - rect.top) / rect.height
+    const stage = event.target.getStage()
+    const pointer = stage?.getPointerPosition()
+    if (!pointer) return
+    const xRatio = pointer.x / stageWidth
+    const yRatio = pointer.y / stageHeight
     if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) return
     setAddingPin({ x: xRatio, y: yRatio })
     setIssueModalOpen(true)
-  }
+  }, [mode, stageHeight, stageWidth])
 
   return (
     <main className="flex h-screen flex-col bg-slate-50">
@@ -247,6 +340,12 @@ export default function DrawingEditorClient() {
         <Button variant="outline" size="icon" onClick={() => setZoom(Math.min(2.5, zoom + 0.1))}>
           <ZoomIn className="h-4 w-4" />
         </Button>
+        <Button variant="outline" size="icon" onClick={() => setRotation((prev) => (prev + 270) % 360)}>
+          <RotateCcw className="h-4 w-4" />
+        </Button>
+        <Button variant="outline" size="icon" onClick={() => setRotation((prev) => (prev + 90) % 360)}>
+          <RotateCw className="h-4 w-4" />
+        </Button>
         <div className="ml-auto flex items-center gap-2">
           <Button
             variant="outline"
@@ -280,6 +379,11 @@ export default function DrawingEditorClient() {
               onChange={(event) => setContractorFilter(event.target.value)}
             >
               <option value="all">全業者</option>
+              {contractors.length === 0 ? (
+                <option value="" disabled>
+                  業者が登録されていません
+                </option>
+              ) : null}
               {contractors.map((contractor) => (
                 <option key={contractor.id} value={contractor.id}>
                   {contractor.name}
@@ -338,39 +442,76 @@ export default function DrawingEditorClient() {
               <div className="flex min-h-full items-center justify-center">
                 <div
                   className="relative overflow-hidden bg-white p-2 shadow"
-                  style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
-                  onClick={handleDrawingClick}
+                  style={{ transform: `scale(${effectiveScale})`, transformOrigin: 'center center' }}
                 >
-                  <Document
-                    file={pdfUrl}
-                    onLoadSuccess={({ numPages }) => {
-                      setPdfPageCount(numPages)
-                      setImageError(null)
-                    }}
-                    onLoadError={() => {
-                      setImageError('signed URLの取得に失敗しました')
-                    }}
-                    loading={<div className="p-6 text-sm text-muted-foreground">PDFを読み込み中...</div>}
-                  >
-                    <Page pageNumber={Math.min(pageIndex + 1, totalPages)} width={1100} />
-                  </Document>
-                  <div className="pointer-events-none absolute inset-0">
-                    {pageIssues.map((issue) => (
-                      <button
-                        key={issue.id}
-                        type="button"
-                        className={`pointer-events-auto absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white text-xs font-bold text-white ${
-                          selectedIssueId === issue.id ? 'bg-red-600 ring-2 ring-red-300' : 'bg-blue-600'
-                        }`}
-                        style={{ left: `${issue.pin_x * 100}%`, top: `${issue.pin_y * 100}%` }}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          jumpToIssue(issue)
+                  <div className="relative" style={{ width: stageWidth, height: stageHeight }}>
+                    <Document
+                      file={pdfUrl}
+                      onLoadSuccess={({ numPages }) => {
+                        setPdfPageCount(numPages)
+                        setImageError(null)
+                      }}
+                      onLoadError={() => {
+                        setImageError('signed URLの取得に失敗しました')
+                      }}
+                      loading={<div className="p-6 text-sm text-muted-foreground">PDFを読み込み中...</div>}
+                    >
+                      <Page
+                        pageNumber={Math.min(pageIndex + 1, totalPages)}
+                        width={renderWidth}
+                        rotate={rotation}
+                        onLoadSuccess={(page) => {
+                          const viewport = page.getViewport({ scale: 1 })
+                          setPageSize({ width: viewport.width, height: viewport.height })
                         }}
-                      >
-                        {issue.no}
-                      </button>
-                    ))}
+                      />
+                    </Document>
+                    <Stage
+                      width={stageWidth}
+                      height={stageHeight}
+                      className="absolute inset-0"
+                      onClick={handleStageClick}
+                    >
+                      <Layer>
+                        {pageIssues.map((issue) => {
+                          const x = issue.pin_x * stageWidth
+                          const y = issue.pin_y * stageHeight
+                          const selected = selectedIssueId === issue.id
+                          return (
+                            <Fragment key={issue.id}>
+                              <KonvaCircle
+                                x={x}
+                                y={y}
+                                radius={13}
+                                fill={selected ? '#dc2626' : '#2563eb'}
+                                stroke="#ffffff"
+                                strokeWidth={2}
+                                onClick={(event) => {
+                                  event.cancelBubble = true
+                                  jumpToIssue(issue)
+                                }}
+                              />
+                              <KonvaText
+                                x={x - 8}
+                                y={y - 9}
+                                width={16}
+                                height={16}
+                                align="center"
+                                verticalAlign="middle"
+                                fontSize={10}
+                                fontStyle="bold"
+                                fill="#ffffff"
+                                text={String(issue.no)}
+                                onClick={(event) => {
+                                  event.cancelBubble = true
+                                  jumpToIssue(issue)
+                                }}
+                              />
+                            </Fragment>
+                          )
+                        })}
+                      </Layer>
+                    </Stage>
                   </div>
                 </div>
               </div>
@@ -407,7 +548,6 @@ export default function DrawingEditorClient() {
             <div className="space-y-1">
               <Label>階数</Label>
               <Input
-                required
                 value={form.floor_label}
                 onChange={(event) => setForm((prev) => ({ ...prev, floor_label: event.target.value }))}
               />
@@ -436,24 +576,23 @@ export default function DrawingEditorClient() {
             </div>
             <div className="space-y-1">
               <Label>担当業者</Label>
-              <Input
-                placeholder="業者名で検索"
-                onChange={(event) => {
-                  const key = event.target.value.toLowerCase()
-                  const found = contractors.find((contractor) => contractor.name.toLowerCase().includes(key))
-                  if (found) setForm((prev) => ({ ...prev, contractor_id: found.id }))
-                }}
-              />
               <select
                 className="h-10 w-full rounded-md border px-3"
                 value={form.contractor_id}
                 onChange={(event) => setForm((prev) => ({ ...prev, contractor_id: event.target.value }))}
               >
-                {contractors.map((contractor) => (
-                  <option key={contractor.id} value={contractor.id}>
-                    {contractor.name}
-                  </option>
-                ))}
+                {contractors.length === 0 ? (
+                  <option value="">業者が登録されていません</option>
+                ) : (
+                  <>
+                    <option value="">未選択</option>
+                    {contractors.map((contractor) => (
+                      <option key={contractor.id} value={contractor.id}>
+                        {contractor.name}
+                      </option>
+                    ))}
+                  </>
+                )}
               </select>
             </div>
             <DialogFooter className="gap-2">
