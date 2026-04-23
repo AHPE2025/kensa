@@ -1,13 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
-  DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,86 +19,84 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ISSUE_CATEGORIES, FLOORS, type IssueCategory } from '@/lib/types'
-import { CONTRACTORS } from '@/lib/mock-data'
+import { Checkbox } from '@/components/ui/checkbox'
+import { ISSUE_TYPES, type Contractor } from '@/lib/domain'
 import { Search } from 'lucide-react'
 
-interface IssueModalProps {
+type IssueFormValues = {
+  floor_label: string
+  issue_type: string
+  issue_text: string
+  contractor_id: string
+  status: string
+}
+
+type IssueModalProps = {
   open: boolean
+  title: string
+  contractors: Contractor[]
+  floors: string[]
+  defaultValues: IssueFormValues
   onClose: () => void
-  onSave: (data: {
-    floor: string
-    category: IssueCategory
-    content: string
-    contractorId: string
-  }) => void
-  onSaveAndNext: (data: {
-    floor: string
-    category: IssueCategory
-    content: string
-    contractorId: string
-  }) => void
-  defaultFloor?: string
+  onSave: (values: IssueFormValues) => void
+  onSaveAndNext?: (values: IssueFormValues) => void
+  submitLabel?: string
 }
 
 export function IssueModal({
   open,
+  title,
+  contractors,
+  floors,
+  defaultValues,
   onClose,
   onSave,
   onSaveAndNext,
-  defaultFloor,
+  submitLabel = '保存',
 }: IssueModalProps) {
-  const [floor, setFloor] = useState(defaultFloor ?? '1F')
-  const [category, setCategory] = useState<IssueCategory>('傷')
-  const [content, setContent] = useState('')
-  const [contractorId, setContractorId] = useState('')
+  const [form, setForm] = useState<IssueFormValues>(defaultValues)
   const [contractorSearch, setContractorSearch] = useState('')
 
-  const filteredContractors = CONTRACTORS.filter((c) =>
-    c.name.includes(contractorSearch)
-  )
-
-  const getData = () => ({
-    floor,
-    category,
-    content,
-    contractorId,
-  })
-
-  const resetForm = () => {
-    setContent('')
-    setContractorId('')
+  useEffect(() => {
+    if (!open) return
+    setForm(defaultValues)
     setContractorSearch('')
-  }
+  }, [open, defaultValues])
+
+  const filteredContractors = useMemo(() => {
+    const key = contractorSearch.trim().toLowerCase()
+    if (!key) return contractors
+    return contractors.filter((contractor) => contractor.name.toLowerCase().includes(key))
+  }, [contractors, contractorSearch])
 
   const handleSave = () => {
-    onSave(getData())
-    resetForm()
+    onSave(form)
   }
 
   const handleSaveAndNext = () => {
-    onSaveAndNext(getData())
-    resetForm()
+    if (!onSaveAndNext) return
+    onSaveAndNext(form)
   }
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-lg">指摘を追加</DialogTitle>
-          <DialogDescription>図面上の指摘事項を入力してください</DialogDescription>
+          <DialogTitle className="text-lg">{title}</DialogTitle>
         </DialogHeader>
 
         <div className="flex flex-col gap-5 py-2">
-          {/* Floor */}
           <div className="flex flex-col gap-2">
             <Label className="font-medium">階</Label>
-            <Select value={floor} onValueChange={setFloor}>
+            <Select
+              value={form.floor_label}
+              onValueChange={(value) => setForm((prev) => ({ ...prev, floor_label: value }))}
+            >
               <SelectTrigger className="h-11">
-                <SelectValue />
+                <SelectValue placeholder="階を選択" />
               </SelectTrigger>
               <SelectContent>
-                {FLOORS.map((f) => (
+                {floors.map((f) => (
                   <SelectItem key={f} value={f}>
                     {f}
                   </SelectItem>
@@ -108,92 +105,107 @@ export function IssueModal({
             </Select>
           </div>
 
-          {/* Category */}
           <div className="flex flex-col gap-2">
             <Label className="font-medium">指摘区分</Label>
-            <div className="flex flex-wrap gap-2">
-              {ISSUE_CATEGORIES.map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setCategory(cat)}
-                  className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                    category === cat
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border bg-card text-foreground hover:bg-accent'
-                  }`}
-                >
-                  {cat}
-                </button>
-              ))}
-            </div>
+            <Select
+              value={form.issue_type}
+              onValueChange={(value) => setForm((prev) => ({ ...prev, issue_type: value }))}
+            >
+              <SelectTrigger className="h-11">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ISSUE_TYPES.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {type}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          {/* Content */}
           <div className="flex flex-col gap-2">
             <Label className="font-medium">指摘内容</Label>
             <Textarea
               placeholder="指摘内容を入力してください"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
+              value={form.issue_text}
+              onChange={(event) => setForm((prev) => ({ ...prev, issue_text: event.target.value }))}
               className="min-h-[80px] resize-none"
             />
           </div>
 
-          {/* Contractor */}
           <div className="flex flex-col gap-2">
-            <Label className="font-medium">担当業者</Label>
+            <Label className="font-medium">担当業者（検索付き）</Label>
             <div className="relative mb-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="業者を検索"
                 value={contractorSearch}
-                onChange={(e) => setContractorSearch(e.target.value)}
+                onChange={(event) => setContractorSearch(event.target.value)}
                 className="h-10 pl-9"
               />
             </div>
-            <div className="max-h-40 overflow-y-auto rounded-md border border-border">
-              {filteredContractors.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setContractorId(c.id)}
-                  className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors ${
-                    contractorId === c.id
-                      ? 'bg-primary/10 text-primary font-medium'
-                      : 'hover:bg-accent text-foreground'
-                  }`}
-                >
-                  <div
-                    className="h-2.5 w-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: c.color }}
-                  />
-                  {c.name}
-                  <span className="ml-auto text-xs text-muted-foreground">{c.category}</span>
-                </button>
-              ))}
-            </div>
+            <Select
+              value={form.contractor_id || '__none__'}
+              onValueChange={(value) =>
+                setForm((prev) => ({ ...prev, contractor_id: value === '__none__' ? '' : value }))
+              }
+            >
+              <SelectTrigger className="h-11">
+                <SelectValue placeholder="担当業者を選択" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">未選択</SelectItem>
+                {filteredContractors.map((contractor) => (
+                  <SelectItem key={contractor.id} value={contractor.id}>
+                    {contractor.name}
+                  </SelectItem>
+                ))}
+                {filteredContractors.length === 0 ? (
+                  <SelectItem value="__no_match__" disabled>
+                    該当業者なし
+                  </SelectItem>
+                ) : null}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-md border p-3">
+            <Checkbox
+              id="issue-done"
+              checked={form.status === 'done'}
+              onCheckedChange={(checked) =>
+                setForm((prev) => ({ ...prev, status: checked ? 'done' : 'open' }))
+              }
+            />
+            <Label htmlFor="issue-done" className="cursor-pointer">
+              完了状態（任意）
+            </Label>
           </div>
         </div>
 
         <DialogFooter className="flex-col gap-2 sm:flex-row">
-          <Button variant="outline" onClick={onClose} className="h-11">
+          <Button type="button" variant="outline" onClick={onClose} className="h-11">
             キャンセル
           </Button>
+          {onSaveAndNext ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleSaveAndNext}
+              disabled={!form.issue_text.trim() || !form.floor_label}
+              className="h-11"
+            >
+              保存して次を追加
+            </Button>
+          ) : null}
           <Button
-            variant="secondary"
-            onClick={handleSaveAndNext}
-            disabled={!content || !contractorId}
-            className="h-11"
-          >
-            保存して次を追加
-          </Button>
-          <Button
+            type="button"
             onClick={handleSave}
-            disabled={!content || !contractorId}
-            className="h-11"
+            disabled={!form.issue_text.trim() || !form.floor_label}
+            className="h-11 bg-blue-600 hover:bg-blue-700"
           >
-            保存
+            {submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

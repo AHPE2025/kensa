@@ -1,20 +1,33 @@
 'use client'
 
-import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Download, Filter, MapPin, Move, Pencil, RotateCcw, RotateCw, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { Download, Filter, MapPin, Trash2 } from 'lucide-react'
 import { Document, Page, pdfjs } from 'react-pdf'
-import { Layer, Stage, Text as KonvaText, Circle as KonvaCircle } from 'react-konva'
+import { Layer, Stage } from 'react-konva'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { authedFetch } from '@/lib/authed-fetch'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import { ISSUE_TYPES, type Contractor, type Drawing, type Issue } from '@/lib/domain'
 import { toast } from 'sonner'
+import { DrawingToolbar } from '@/components/drawing-toolbar'
+import { IssueListPanel } from '@/components/issue-list-panel'
+import { ContractorFilter } from '@/components/contractor-filter'
+import { IssuePin } from '@/components/issue-pin'
+import { IssueModal } from '@/components/issue-modal'
 
 type DrawingRow = Drawing & {
   signed_url: string | null
@@ -23,11 +36,12 @@ type DrawingRow = Drawing & {
   signed_page_urls?: Array<string | null>
 }
 
-type IssueForm = {
+type IssueFormValues = {
   floor_label: string
   issue_type: string
   issue_text: string
   contractor_id: string
+  status: string
 }
 
 type IssueResponse = {
@@ -37,6 +51,28 @@ type IssueResponse = {
   error?: string
   missing?: string[]
 }
+
+const FALLBACK_CONTRACTOR_NAMES = [
+  'ウエハラ工芸',
+  '新星工業',
+  '幡成サッシ',
+  'SHIN鉄工',
+  'アルテエンジニアリング',
+  '栄光プロビジョン',
+  '富士機材',
+  '工藤工務店',
+] as const
+
+const FALLBACK_CONTRACTORS: Contractor[] = FALLBACK_CONTRACTOR_NAMES.map((name, index) => ({
+  id: `fallback-${index}`,
+  tenant_id: 'fallback',
+  name,
+  category: '開発用',
+  phone: null,
+  created_at: new Date(0).toISOString(),
+}))
+
+const UNASSIGNED_CONTRACTOR_KEY = '__none__'
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
@@ -51,14 +87,10 @@ export default function DrawingEditorClient() {
   const mode = useEditorStore((s) => s.mode)
   const zoom = useEditorStore((s) => s.zoom)
   const issues = useEditorStore((s) => s.issues)
-  const contractorFilter = useEditorStore((s) => s.contractorFilter)
-  const searchText = useEditorStore((s) => s.searchText)
   const setIssues = useEditorStore((s) => s.setIssues)
   const setMode = useEditorStore((s) => s.setMode)
   const setZoom = useEditorStore((s) => s.setZoom)
   const setPan = useEditorStore((s) => s.setPan)
-  const setContractorFilter = useEditorStore((s) => s.setContractorFilter)
-  const setSearchText = useEditorStore((s) => s.setSearchText)
 
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
   const [currentDrawing, setCurrentDrawing] = useState<DrawingRow | null>(null)
@@ -71,13 +103,19 @@ export default function DrawingEditorClient() {
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
-  const [saveAndContinue, setSaveAndContinue] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<'issues' | 'contractors'>('issues')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [editingIssue, setEditingIssue] = useState<Issue | null>(null)
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null)
-  const [form, setForm] = useState<IssueForm>({
-    floor_label: '',
-    issue_type: ISSUE_TYPES[0],
-    issue_text: '',
-    contractor_id: '',
+  const [visibleContractorIds, setVisibleContractorIds] = useState<Set<string>>(
+    new Set([UNASSIGNED_CONTRACTOR_KEY]),
+  )
+  const [listFilters, setListFilters] = useState({
+    searchText: '',
+    contractorId: 'all',
+    issueType: 'all',
+    floorLabel: 'all',
   })
 
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -113,8 +151,10 @@ export default function DrawingEditorClient() {
       if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
       if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
 
-      const contractors = contractorData.contractors ?? []
-      console.log("contractors:", contractors)
+      const resolvedContractors = (contractorData.contractors ?? []).length > 0
+        ? (contractorData.contractors ?? [])
+        : FALLBACK_CONTRACTORS
+      console.log('contractors:', resolvedContractors)
 
       setDrawings(drawingListData.drawings ?? [])
       const drawingFromList = (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
@@ -126,14 +166,17 @@ export default function DrawingEditorClient() {
           }
         : drawingFromList
       setCurrentDrawing(drawing)
-      setContractors(contractors)
+      setContractors(resolvedContractors)
+      setVisibleContractorIds(
+        new Set([UNASSIGNED_CONTRACTOR_KEY, ...resolvedContractors.map((contractor) => contractor.id)]),
+      )
       setIssues(issueData.issues ?? [])
       setPageIndex(0)
       if (drawing) {
-        setForm((prev) => ({ ...prev, floor_label: drawing.floor_label }))
+        setListFilters((prev) => ({ ...prev, floorLabel: 'all' }))
       }
     } catch (error) {
-      console.error("contractors load error:", error)
+      console.error('contractors load error:', error)
       toast.error('業者取得失敗')
     }
   }
@@ -141,12 +184,6 @@ export default function DrawingEditorClient() {
   useEffect(() => {
     if (user) void loadData()
   }, [user, drawingId, projectId])
-
-  useEffect(() => {
-    if (contractorFilter === 'all') return
-    if (contractors.some((contractor) => contractor.id === contractorFilter)) return
-    setContractorFilter('all')
-  }, [contractors, contractorFilter, setContractorFilter])
 
   useEffect(() => {
     setZoom(1)
@@ -165,81 +202,147 @@ export default function DrawingEditorClient() {
     console.log("rotation:", rotation)
   }, [rotation])
 
-  const filteredIssues = useMemo(() => {
-    const key = searchText.trim().toLowerCase()
-    return issues.filter((issue) => {
-      if (issue.page_index !== pageIndex) return false
-      if (contractorFilter !== 'all' && issue.contractor_id !== contractorFilter) return false
-      if (!key) return true
-      const contractorName = issue.contractor?.name ?? ''
-      return `${issue.issue_text}${issue.issue_type}${contractorName}`.toLowerCase().includes(key)
-    })
-  }, [issues, contractorFilter, searchText, pageIndex])
-
   const numberedIssues = useMemo(() => {
     const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
     return sorted.map((issue, index) => ({ ...issue, no: index + 1 }))
   }, [issues])
 
-  const pageIssues = filteredIssues.map((issue) => ({
-    ...issue,
-    no: numberedIssues.find((x) => x.id === issue.id)?.no ?? 0,
-  }))
+  const pageIssues = useMemo(() => {
+    const key = listFilters.searchText.trim().toLowerCase()
+    return numberedIssues.filter((issue) => {
+      if (issue.page_index !== pageIndex) return false
+      if (!visibleContractorIds.has(issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY)) return false
+      if (listFilters.contractorId !== 'all') {
+        if (listFilters.contractorId === UNASSIGNED_CONTRACTOR_KEY && issue.contractor_id !== null) return false
+        if (listFilters.contractorId !== UNASSIGNED_CONTRACTOR_KEY && issue.contractor_id !== listFilters.contractorId) return false
+      }
+      if (listFilters.issueType !== 'all' && issue.issue_type !== listFilters.issueType) return false
+      if (listFilters.floorLabel !== 'all' && issue.floor_label !== listFilters.floorLabel) return false
+      if (!key) return true
+      const contractorName = issue.contractor?.name ?? ''
+      return `${issue.issue_text}${issue.issue_type}${contractorName}${issue.floor_label}`.toLowerCase().includes(key)
+    })
+  }, [listFilters, numberedIssues, pageIndex, visibleContractorIds])
 
-  const onSaveIssue = async (event: FormEvent) => {
-    event.preventDefault()
-    if (!addingPin) return
-    try {
-      const payload = {
-        page_index: pageIndex,
-        floor_label: form.floor_label || currentDrawing?.floor_label,
-        issue_type: form.issue_type,
-        issue_text: form.issue_text.trim(),
-        contractor_id: form.contractor_id || null,
-        pin_x: addingPin.x,
-        pin_y: addingPin.y,
-      }
-      console.log('issue payload:', payload)
+  const floors = useMemo(() => {
+    const set = new Set(drawings.map((drawing) => drawing.floor_label))
+    return Array.from(set)
+  }, [drawings])
 
-      const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const data = (await response.json()) as IssueResponse
-      if (!response.ok || !data.issue) {
-        const errorMessage = Array.isArray(data.missing) && data.missing.length > 0
-          ? `${data.error ?? '保存失敗'}: ${data.missing.join(', ')}`
-          : data.error ?? '保存失敗'
-        console.error('create issue error:', data)
-        toast.error(errorMessage)
-        return
-      }
+  const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
+  const isFallbackContractor = useCallback((contractorId: string) => contractorId.startsWith('fallback-'), [])
 
-      const refreshed = await refetchIssues()
-      if (!refreshed) {
-        setIssues([...issues, data.issue])
+  const createIssue = useCallback(
+    async (values: IssueFormValues, continueMode: boolean) => {
+      if (!addingPin || !currentDrawing) return
+      try {
+        const payload = {
+          tenant_id: user?.id ?? null,
+          project_id: projectId,
+          drawing_id: drawingId,
+          page_index: pageIndex ?? 0,
+          floor_label: values.floor_label || currentDrawing.floor_label,
+          issue_type: values.issue_type,
+          issue_text: values.issue_text.trim(),
+          contractor_id:
+            values.contractor_id && !isFallbackContractor(values.contractor_id)
+              ? values.contractor_id
+              : null,
+          pin_x: addingPin.x,
+          pin_y: addingPin.y,
+          callout_x: addingPin.x + 0.05,
+          callout_y: addingPin.y - 0.05,
+          status: values.status || 'open',
+        }
+        console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
+
+        const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const data = (await response.json()) as IssueResponse
+        if (!response.ok || !data.issue) {
+          const errorMessage = Array.isArray(data.missing) && data.missing.length > 0
+            ? `${data.error ?? '保存失敗'}: ${data.missing.join(', ')}`
+            : data.error ?? '保存失敗'
+          console.error('create issue error:', data)
+          toast.error(errorMessage)
+          return
+        }
+        await refetchIssues()
+        setSelectedIssueId(data.issue.id)
+        setAddingPin(null)
+        setIssueModalOpen(false)
+        toast.success('指摘を保存しました')
+        if (continueMode) {
+          setMode('add')
+        }
+      } catch (error) {
+        console.error('create issue error:', error)
+        toast.error('保存失敗')
       }
-      setForm((prev) => ({ ...prev, issue_text: '' }))
-      setAddingPin(null)
-      setIssueModalOpen(false)
-      toast.success('指摘を保存しました')
-      if (saveAndContinue) {
-        setMode('add')
+    },
+    [addingPin, currentDrawing, drawingId, isFallbackContractor, pageIndex, projectId, refetchIssues, setMode, user?.id],
+  )
+
+  const updateIssue = useCallback(
+    async (targetIssue: Issue, values: IssueFormValues) => {
+      try {
+        const payload = {
+          floor_label: values.floor_label || currentDrawing?.floor_label,
+          issue_type: values.issue_type,
+          issue_text: values.issue_text.trim(),
+          contractor_id:
+            values.contractor_id && !isFallbackContractor(values.contractor_id)
+              ? values.contractor_id
+              : null,
+          status: values.status || 'open',
+        }
+        console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
+        const response = await authedFetch(`/api/issues/${targetIssue.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const data = (await response.json()) as { issue?: Issue; error?: string; missing?: string[] }
+        if (!response.ok || !data.issue) {
+          console.error('create issue error:', data.error ?? data)
+          toast.error(data.error ?? '更新に失敗しました')
+          return
+        }
+        await refetchIssues()
+        setSelectedIssueId(targetIssue.id)
+        setEditingIssue(null)
+        setIssueModalOpen(false)
+        toast.success('指摘を更新しました')
+      } catch (error) {
+        console.error('create issue error:', error)
+        toast.error('更新に失敗しました')
       }
-    } catch (error) {
-      console.error('create issue error:', error)
-      toast.error('保存失敗')
-    }
-  }
+    },
+    [currentDrawing?.floor_label, isFallbackContractor, refetchIssues],
+  )
 
   const deleteIssue = async () => {
     if (!selectedIssueId) return
-    const response = await authedFetch(`/api/issues/${selectedIssueId}`, { method: 'DELETE' })
-    const data = (await response.json()) as { error?: string }
-    if (!response.ok) return toast.error(data.error ?? '削除失敗')
-    setIssues(issues.filter((issue) => issue.id !== selectedIssueId))
-    setSelectedIssueId(null)
+    try {
+      const response = await authedFetch(`/api/issues/${selectedIssueId}`, { method: 'DELETE' })
+      const data = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        console.error('create issue error:', data.error ?? data)
+        toast.error(data.error ?? '削除失敗')
+        return
+      }
+      await refetchIssues()
+      setSelectedIssueId(null)
+      toast.success('指摘を削除しました')
+    } catch (error) {
+      console.error('create issue error:', error)
+      toast.error('削除失敗')
+    } finally {
+      setDeleteConfirmOpen(false)
+    }
   }
 
   const jumpToIssue = (issue: Issue) => {
@@ -247,7 +350,28 @@ export default function DrawingEditorClient() {
     console.log('issue selected:', issue.id)
   }
 
-  const issueContractorName = (issue: Issue) => issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? ''
+  const startEditIssue = (issue: Issue) => {
+    setEditingIssue(issue)
+    setIssueModalOpen(true)
+  }
+
+  const updateCalloutPosition = useCallback(
+    async (issueId: string, calloutX: number, calloutY: number) => {
+      const response = await authedFetch(`/api/issues/${issueId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callout_x: calloutX, callout_y: calloutY }),
+      })
+      const data = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        console.error('create issue error:', data.error ?? data)
+        return
+      }
+      await refetchIssues()
+    },
+    [refetchIssues],
+  )
+
   const pdfUrl = currentDrawing?.signed_url ?? null
   const totalPages = Math.max(pdfPageCount, currentDrawing?.page_count ?? 0, 1)
   const renderWidth = 1100
@@ -300,121 +424,79 @@ export default function DrawingEditorClient() {
     const yRatio = pointer.y / stageHeight
     if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) return
     setAddingPin({ x: xRatio, y: yRatio })
+    setEditingIssue(null)
     setIssueModalOpen(true)
   }, [mode, stageHeight, stageWidth])
 
   return (
     <main className="flex h-screen flex-col bg-slate-50">
-      <header className="flex flex-wrap items-center gap-2 border-b bg-white px-3 py-2">
-        <Button variant="outline" size="icon" onClick={() => router.push(`/projects/${projectId}`)}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <select
-          className="h-10 rounded-md border px-3"
-          value={currentDrawing?.id ?? ''}
-          onChange={(event) => router.push(`/projects/${projectId}/drawings/${event.target.value}`)}
-        >
-          {drawings.map((drawing) => (
-            <option key={drawing.id} value={drawing.id}>
-              {drawing.floor_label}
-            </option>
-          ))}
-        </select>
-        <div className="flex items-center gap-1 rounded-md border p-1">
-          <Button size="sm" variant={mode === 'move' ? 'default' : 'ghost'} onClick={() => setMode('move')}>
-            <Move className="mr-1 h-4 w-4" />
-            移動
-          </Button>
-          <Button size="sm" variant={mode === 'add' ? 'default' : 'ghost'} onClick={() => setMode('add')}>
-            <MapPin className="mr-1 h-4 w-4" />
-            追加
-          </Button>
-          <Button size="sm" variant={mode === 'edit' ? 'default' : 'ghost'} onClick={() => setMode('edit')}>
-            <Pencil className="mr-1 h-4 w-4" />
-            編集
-          </Button>
-        </div>
-        <Button variant="outline" size="icon" onClick={() => setZoom(Math.max(0.5, zoom - 0.1))}>
-          <ZoomOut className="h-4 w-4" />
-        </Button>
-        <Button variant="outline" size="icon" onClick={() => setZoom(Math.min(2.5, zoom + 0.1))}>
-          <ZoomIn className="h-4 w-4" />
-        </Button>
-        <Button variant="outline" size="icon" onClick={() => setRotation((prev) => (prev + 270) % 360)}>
-          <RotateCcw className="h-4 w-4" />
-        </Button>
-        <Button variant="outline" size="icon" onClick={() => setRotation((prev) => (prev + 90) % 360)}>
-          <RotateCw className="h-4 w-4" />
-        </Button>
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            disabled={pageIndex <= 0}
-            onClick={() => setPageIndex((v) => Math.max(v - 1, 0))}
-          >
-            前ページ
-          </Button>
-          <span className="text-sm">
-            {pageIndex + 1} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            disabled={!currentDrawing || pageIndex >= totalPages - 1}
-            onClick={() =>
-              setPageIndex((v) => Math.min(v + 1, totalPages - 1))
-            }
-          >
-            次ページ
-          </Button>
-        </div>
-      </header>
-
+      <DrawingToolbar
+        drawings={drawings}
+        currentDrawingId={currentDrawing?.id ?? ''}
+        mode={mode}
+        zoom={zoom}
+        pageIndex={pageIndex}
+        totalPages={totalPages}
+        rotation={rotation}
+        onBack={() => router.push(`/projects/${projectId}`)}
+        onChangeDrawing={(value) => router.push(`/projects/${projectId}/drawings/${value}`)}
+        onChangeMode={setMode}
+        onZoomIn={() => setZoom(Math.min(2.5, zoom + 0.1))}
+        onZoomOut={() => setZoom(Math.max(0.5, zoom - 0.1))}
+        onPrevPage={() => setPageIndex((value) => Math.max(value - 1, 0))}
+        onNextPage={() => setPageIndex((value) => Math.min(value + 1, totalPages - 1))}
+        onRotate={() => setRotation((prev) => (prev + 90) % 360)}
+      />
       <div className="flex min-h-0 flex-1">
-        <aside className="w-80 border-r bg-white p-3">
-          <div className="space-y-2">
-            <Label>業者フィルタ</Label>
-            <select
-              className="h-10 w-full rounded-md border px-3"
-              value={contractorFilter}
-              onChange={(event) => setContractorFilter(event.target.value)}
+        {sidebarOpen ? (
+          <aside className="w-80 border-r bg-white">
+            <Tabs
+              value={sidebarTab}
+              onValueChange={(value) => setSidebarTab(value as 'issues' | 'contractors')}
+              className="flex h-full flex-col"
             >
-              <option value="all">全業者</option>
-              {contractors.length === 0 ? (
-                <option value="" disabled>
-                  業者が登録されていません
-                </option>
-              ) : null}
-              {contractors.map((contractor) => (
-                <option key={contractor.id} value={contractor.id}>
-                  {contractor.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="mt-2 space-y-2">
-            <Label>検索</Label>
-            <Input value={searchText} onChange={(event) => setSearchText(event.target.value)} />
-          </div>
-          <div className="mt-3">
-            <h3 className="mb-2 text-sm font-semibold">指摘一覧</h3>
-            <div className="max-h-[calc(100vh-280px)] space-y-2 overflow-auto">
-              {pageIssues.map((issue) => (
-                <button
-                  key={issue.id}
-                  onClick={() => jumpToIssue(issue)}
-                  className={`w-full rounded-md border p-2 text-left text-sm ${selectedIssueId === issue.id ? 'border-blue-500 bg-blue-50' : ''}`}
-                >
-                  <div className="font-medium">
-                    No.{issue.no} {issue.issue_type}
-                  </div>
-                  <div className="truncate text-muted-foreground">{issue.issue_text}</div>
-                  <div className="text-xs text-muted-foreground">{issueContractorName(issue)}</div>
-                </button>
-              ))}
-              {pageIssues.length === 0 ? <p className="text-sm text-muted-foreground">指摘がありません</p> : null}
-            </div>
-          </div>
-        </aside>
+              <TabsList className="mx-3 mt-3 grid h-10 grid-cols-2">
+                <TabsTrigger value="issues">指摘一覧</TabsTrigger>
+                <TabsTrigger value="contractors">業者表示</TabsTrigger>
+              </TabsList>
+              <TabsContent value="issues" className="mt-3 min-h-0 flex-1">
+                <IssueListPanel
+                  issues={pageIssues}
+                  contractors={contractors}
+                  floors={floors}
+                  selectedIssueId={selectedIssueId}
+                  filters={listFilters}
+                  onFilterChange={(next) => setListFilters((prev) => ({ ...prev, ...next }))}
+                  onSelectIssue={jumpToIssue}
+                  onEditIssue={startEditIssue}
+                />
+              </TabsContent>
+              <TabsContent value="contractors" className="mt-3 min-h-0 flex-1">
+                <ContractorFilter
+                  contractors={contractors}
+                  visibleContractorIds={visibleContractorIds}
+                  onToggle={(contractorId) => {
+                    setVisibleContractorIds((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(contractorId)) {
+                        next.delete(contractorId)
+                      } else {
+                        next.add(contractorId)
+                      }
+                      return next
+                    })
+                  }}
+                  onShowAll={() =>
+                    setVisibleContractorIds(
+                      new Set([UNASSIGNED_CONTRACTOR_KEY, ...contractors.map((contractor) => contractor.id)]),
+                    )
+                  }
+                  onShowOnly={(contractorId) => setVisibleContractorIds(new Set([contractorId]))}
+                />
+              </TabsContent>
+            </Tabs>
+          </aside>
+        ) : null}
 
         <section className="relative flex-1 overflow-hidden" ref={containerRef}>
           <div className="absolute inset-0 overflow-auto bg-slate-200 p-4">
@@ -474,40 +556,21 @@ export default function DrawingEditorClient() {
                     >
                       <Layer>
                         {pageIssues.map((issue) => {
-                          const x = issue.pin_x * stageWidth
-                          const y = issue.pin_y * stageHeight
-                          const selected = selectedIssueId === issue.id
+                          if (!visibleContractorIds.has(getIssueContractorId(issue))) return null
                           return (
-                            <Fragment key={issue.id}>
-                              <KonvaCircle
-                                x={x}
-                                y={y}
-                                radius={13}
-                                fill={selected ? '#dc2626' : '#2563eb'}
-                                stroke="#ffffff"
-                                strokeWidth={2}
-                                onClick={(event) => {
-                                  event.cancelBubble = true
-                                  jumpToIssue(issue)
-                                }}
-                              />
-                              <KonvaText
-                                x={x - 8}
-                                y={y - 9}
-                                width={16}
-                                height={16}
-                                align="center"
-                                verticalAlign="middle"
-                                fontSize={10}
-                                fontStyle="bold"
-                                fill="#ffffff"
-                                text={String(issue.no)}
-                                onClick={(event) => {
-                                  event.cancelBubble = true
-                                  jumpToIssue(issue)
-                                }}
-                              />
-                            </Fragment>
+                            <IssuePin
+                              key={issue.id}
+                              issue={issue}
+                              stageWidth={stageWidth}
+                              stageHeight={stageHeight}
+                              isSelected={selectedIssueId === issue.id}
+                              canDragCallout={mode === 'edit'}
+                              onSelect={(selectedIssue) => {
+                                jumpToIssue(selectedIssue)
+                                if (mode === 'edit') startEditIssue(selectedIssue)
+                              }}
+                              onDragCallout={updateCalloutPosition}
+                            />
                           )
                         })}
                       </Layer>
@@ -523,7 +586,14 @@ export default function DrawingEditorClient() {
               <MapPin className="mr-2 h-5 w-5" />
               ピン追加
             </Button>
-            <Button variant="secondary" className="h-12" onClick={() => router.push(`/projects/${projectId}`)}>
+            <Button
+              variant="secondary"
+              className="h-12"
+              onClick={() => {
+                setSidebarOpen(true)
+                setSidebarTab('contractors')
+              }}
+            >
               <Filter className="mr-2 h-5 w-5" />
               業者フィルタ
             </Button>
@@ -531,99 +601,72 @@ export default function DrawingEditorClient() {
               <Download className="mr-2 h-5 w-5" />
               PDF出力
             </Button>
-            <Button variant="destructive" className="h-12" onClick={deleteIssue} disabled={!selectedIssueId}>
+            <Button
+              variant="destructive"
+              className="h-12"
+              onClick={() => setDeleteConfirmOpen(true)}
+              disabled={!selectedIssueId}
+            >
               <Trash2 className="mr-2 h-5 w-5" />
               選択削除
+            </Button>
+          </div>
+          <div className="absolute left-4 top-4 z-20">
+            <Button variant="outline" size="sm" onClick={() => setSidebarOpen((prev) => !prev)}>
+              {sidebarOpen ? 'サイドパネルを閉じる' : 'サイドパネルを開く'}
             </Button>
           </div>
         </section>
       </div>
 
-      <Dialog open={issueModalOpen} onOpenChange={setIssueModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>指摘入力</DialogTitle>
-          </DialogHeader>
-          <form className="space-y-3" onSubmit={onSaveIssue}>
-            <div className="space-y-1">
-              <Label>階数</Label>
-              <Input
-                value={form.floor_label}
-                onChange={(event) => setForm((prev) => ({ ...prev, floor_label: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>指摘区分</Label>
-              <select
-                className="h-10 w-full rounded-md border px-3"
-                value={form.issue_type}
-                onChange={(event) => setForm((prev) => ({ ...prev, issue_type: event.target.value }))}
-              >
-                {ISSUE_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label>指摘内容</Label>
-              <Input
-                required
-                value={form.issue_text}
-                onChange={(event) => setForm((prev) => ({ ...prev, issue_text: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>担当業者</Label>
-              <select
-                className="h-10 w-full rounded-md border px-3"
-                value={form.contractor_id}
-                onChange={(event) => setForm((prev) => ({ ...prev, contractor_id: event.target.value }))}
-              >
-                {contractors.length === 0 ? (
-                  <option value="">業者が登録されていません</option>
-                ) : (
-                  <>
-                    <option value="">未選択</option>
-                    {contractors.map((contractor) => (
-                      <option key={contractor.id} value={contractor.id}>
-                        {contractor.name}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
-            <DialogFooter className="gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setIssueModalOpen(false)
-                  setAddingPin(null)
-                }}
-              >
-                キャンセル
-              </Button>
-              <Button
-                type="submit"
-                variant="secondary"
-                onClick={() => setSaveAndContinue(false)}
-              >
-                保存
-              </Button>
-              <Button
-                type="submit"
-                className="bg-blue-600 hover:bg-blue-700"
-                onClick={() => setSaveAndContinue(true)}
-              >
-                保存して次を追加
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <IssueModal
+        open={issueModalOpen}
+        title={editingIssue ? '指摘を編集' : '指摘を追加'}
+        contractors={contractors}
+        floors={floors.length > 0 ? floors : [currentDrawing?.floor_label ?? '1F']}
+        defaultValues={{
+          floor_label: editingIssue?.floor_label ?? currentDrawing?.floor_label ?? '',
+          issue_type: editingIssue?.issue_type ?? ISSUE_TYPES[0],
+          issue_text: editingIssue?.issue_text ?? '',
+          contractor_id: editingIssue?.contractor_id ?? '',
+          status: editingIssue?.status ?? 'open',
+        }}
+        onClose={() => {
+          setIssueModalOpen(false)
+          setAddingPin(null)
+          setEditingIssue(null)
+        }}
+        onSave={(values) => {
+          if (editingIssue) {
+            void updateIssue(editingIssue, values)
+            return
+          }
+          void createIssue(values, false)
+        }}
+        onSaveAndNext={
+          editingIssue
+            ? undefined
+            : (values) => {
+                void createIssue(values, true)
+              }
+        }
+        submitLabel={editingIssue ? '更新' : '保存'}
+      />
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>指摘を削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              選択した指摘を削除します。この操作は取り消せません。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void deleteIssue()}>削除する</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   )
 }

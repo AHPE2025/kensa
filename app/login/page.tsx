@@ -59,16 +59,16 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+    <main className="flex min-h-screen items-center justify-center bg-white px-4">
       <Card className="w-full max-w-md border-blue-100 shadow-lg">
         <CardHeader>
-          <CardTitle className="text-2xl text-blue-700">引き渡し前検査システム</CardTitle>
-          <CardDescription>メールアドレスでログインしてください</CardDescription>
+          <CardTitle className="text-2xl text-blue-700">建物検査システム</CardTitle>
+          <CardDescription>メールアドレスとパスワードでログインしてください</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="space-y-2">
-              <Label htmlFor="email">メール</Label>
+              <Label htmlFor="email">メールアドレス</Label>
               <Input
                 id="email"
                 type="email"
@@ -90,6 +90,9 @@ export default function LoginPage() {
             <Button className="h-11 w-full bg-blue-600 hover:bg-blue-700" disabled={loading}>
               {loading ? '処理中...' : 'ログイン'}
             </Button>
+            <p className="text-center text-sm text-blue-600/90 underline-offset-2 hover:underline">
+              パスワードを忘れた場合
+            </p>
           </form>
         </CardContent>
       </Card>

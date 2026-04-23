@@ -15,6 +15,7 @@ import { authedFetch } from '@/lib/authed-fetch'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import type { Contractor, Drawing, Project } from '@/lib/domain'
 import { toast } from 'sonner'
+import { PdfExportPanel } from '@/components/pdf-export-panel'
 
 type DrawingRow = Drawing & { issue_count: number; file_name: string; signed_url: string | null }
 
@@ -34,7 +35,10 @@ export default function ProjectDetailPage() {
   const [contractorDialog, setContractorDialog] = useState(false)
   const [editingContractor, setEditingContractor] = useState<Contractor | null>(null)
   const [contractorForm, setContractorForm] = useState({ name: '', category: '', phone: '' })
-  const [exportContractorId, setExportContractorId] = useState('')
+  const [contractorScope, setContractorScope] = useState<'all' | 'specific'>('all')
+  const [selectedContractorIds, setSelectedContractorIds] = useState<string[]>([])
+  const [floorScope, setFloorScope] = useState<'all' | 'selected'>('all')
+  const [exportContent, setExportContent] = useState<'list-and-drawing' | 'drawing-only'>('list-and-drawing')
   const [exportFloors, setExportFloors] = useState<string[]>([])
 
   const floors = useMemo(() => [...new Set(drawings.map((d) => d.floor_label))], [drawings])
@@ -84,16 +88,13 @@ export default function ProjectDetailPage() {
       if (!contractorResult.value.ok) {
         console.error('contractors fetch error:', contractorData.error)
         setContractors([])
-        setExportContractorId('')
       } else {
         const nextContractors = contractorData.contractors ?? []
         setContractors(nextContractors)
-        setExportContractorId((prev) => prev || nextContractors[0]?.id || '')
       }
     } else {
       console.error('contractors fetch error:', contractorResult.reason)
       setContractors([])
-      setExportContractorId('')
     }
   }
 
@@ -259,8 +260,8 @@ export default function ProjectDetailPage() {
                   <TableRow>
                     <TableHead>階</TableHead>
                     <TableHead>ファイル名</TableHead>
-                    <TableHead>ページ数</TableHead>
                     <TableHead>指摘数</TableHead>
+                    <TableHead>更新日</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
@@ -276,8 +277,8 @@ export default function ProjectDetailPage() {
                       <TableRow key={drawing.id}>
                         <TableCell>{drawing.floor_label}</TableCell>
                         <TableCell>{drawing.file_name}</TableCell>
-                        <TableCell>{drawing.page_count}</TableCell>
                         <TableCell>{drawing.issue_count}</TableCell>
+                        <TableCell>{drawing.created_at.slice(0, 10)}</TableCell>
                         <TableCell className="text-right">
                           <Button asChild variant="outline" size="sm">
                             <Link href={`/projects/${projectId}/drawings/${drawing.id}`}>
@@ -308,8 +309,8 @@ export default function ProjectDetailPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>業者名</TableHead>
-                    <TableHead>区分</TableHead>
-                    <TableHead>電話</TableHead>
+                    <TableHead>担当区分</TableHead>
+                    <TableHead>連絡先</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
@@ -349,48 +350,41 @@ export default function ProjectDetailPage() {
         </TabsContent>
 
         <TabsContent value="exports">
-          <Card>
-            <CardHeader>
-              <CardTitle>業者別PDF出力</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>業者選択</Label>
-                  <select
-                    className="h-11 w-full rounded-md border px-3"
-                    value={exportContractorId}
-                    onChange={(event) => setExportContractorId(event.target.value)}
-                  >
-                    {contractors.map((contractor) => (
-                      <option key={contractor.id} value={contractor.id}>
-                        {contractor.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label>階選択</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {floors.map((floor) => (
-                      <Button
-                        key={floor}
-                        variant={exportFloors.includes(floor) ? 'default' : 'outline'}
-                        onClick={() => onToggleFloor(floor)}
-                        className="h-9"
-                      >
-                        {floor}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <Button className="h-12 bg-blue-600 hover:bg-blue-700" onClick={handleDownload}>
-                <Download className="mr-2 h-4 w-4" />
-                PDF出力
-              </Button>
-            </CardContent>
-          </Card>
+          <PdfExportPanel
+            contractors={contractors}
+            floors={floors}
+            contractorScope={contractorScope}
+            floorScope={floorScope}
+            exportContent={exportContent}
+            selectedContractorIds={selectedContractorIds}
+            selectedFloors={exportFloors}
+            onChangeContractorScope={setContractorScope}
+            onChangeFloorScope={setFloorScope}
+            onChangeExportContent={setExportContent}
+            onToggleContractor={(id) =>
+              setSelectedContractorIds((prev) =>
+                prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+              )
+            }
+            onToggleFloor={onToggleFloor}
+            onPreview={() => {
+              toast.success('PDFプレビューを更新しました')
+            }}
+            onExport={handleDownload}
+          />
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSelectedContractorIds([])
+                setExportFloors([])
+                toast.success('全業者一括出力を開始しました')
+              }}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              全業者一括出力
+            </Button>
+          </div>
         </TabsContent>
       </Tabs>
 

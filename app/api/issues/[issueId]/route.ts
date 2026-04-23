@@ -39,7 +39,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     .select('*, contractor:contractors(id,name)')
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  if (error) {
+    console.error('issue update error:', error)
+    return NextResponse.json({ error: error.message, details: error }, { status: 400 })
+  }
   return NextResponse.json({ issue: data })
 }
 
@@ -50,6 +53,9 @@ export async function DELETE(request: NextRequest, { params }: Params) {
   const { issueId } = await params
 
   const { error } = await client.from('issues').delete().eq('id', issueId).eq('tenant_id', tenantId)
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  if (error) {
+    console.error('issue delete error:', error)
+    return NextResponse.json({ error: error.message, details: error }, { status: 400 })
+  }
   return NextResponse.json({ ok: true })
 }

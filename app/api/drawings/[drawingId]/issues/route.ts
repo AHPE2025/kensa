@@ -111,7 +111,8 @@ export async function POST(request: NextRequest, { params }: Params) {
     .single()
 
   if (drawingError || !drawing) {
-    return NextResponse.json({ error: 'drawing が見つかりません' }, { status: 404 })
+    console.error('create issue error:', drawingError ?? 'drawing not found')
+    return NextResponse.json({ error: 'drawing が見つかりません', details: drawingError }, { status: 404 })
   }
 
   const resolvedPinX = body.pin_x ?? body.x_ratio
@@ -126,8 +127,9 @@ export async function POST(request: NextRequest, { params }: Params) {
   if (!issueText) missing.push('issue_text')
 
   if (missing.length > 0) {
+    console.error('create issue error:', { error: '必須項目が不足しています', missing })
     return NextResponse.json(
-      { error: '必須項目が不足しています', missing },
+      { error: '必須項目が不足しています', missing, details: { drawingId } },
       { status: 400 },
     )
   }
@@ -159,6 +161,9 @@ export async function POST(request: NextRequest, { params }: Params) {
     .select('*, contractor:contractors(id,name)')
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  if (error) {
+    console.error('create issue error:', error)
+    return NextResponse.json({ error: error.message, details: error }, { status: 400 })
+  }
   return NextResponse.json({ issue: data })
 }

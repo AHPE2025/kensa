@@ -3,11 +3,14 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Search } from 'lucide-react'
+import { CalendarDays, Clock3, MapPin, Search } from 'lucide-react'
+import { format } from 'date-fns'
+import { ja } from 'date-fns/locale'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
   DialogContent,
@@ -190,7 +193,7 @@ export default function ProjectsPage() {
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           className="pl-9"
-          placeholder="物件名または住所で検索"
+          placeholder="物件名または現場名で検索"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
@@ -209,17 +212,32 @@ export default function ProjectsPage() {
           {filtered.map((project) => (
             <Card key={project.id} className="border-blue-100">
               <CardHeader>
-                <CardTitle>{project.name}</CardTitle>
+                <CardTitle className="text-xl">{project.name}</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-1 text-sm">
-                <p>{project.address}</p>
-                <p>検査日: {project.inspection_date}</p>
-                <p>指摘: {project.issue_count}件 / 未対応: {project.open_count}件</p>
-                <p className="text-muted-foreground">最終更新: {project.latest_update.slice(0, 10)}</p>
+              <CardContent className="space-y-2 text-sm">
+                <p className="flex items-center gap-2 text-muted-foreground">
+                  <MapPin className="h-4 w-4" />
+                  {project.address}
+                </p>
+                <p className="flex items-center gap-2">
+                  <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                  検査日: {project.inspection_date}
+                </p>
+                <p>指摘数: {project.issue_count}件</p>
+                <div className="flex items-center gap-2">
+                  <Badge variant={project.open_count > 0 ? 'destructive' : 'secondary'}>未対応 {project.open_count}件</Badge>
+                </div>
+                <p className="flex items-center gap-2 text-muted-foreground">
+                  <Clock3 className="h-4 w-4" />
+                  最終更新日:{' '}
+                  {format(new Date(project.latest_update), 'yyyy/MM/dd', {
+                    locale: ja,
+                  })}
+                </p>
               </CardContent>
               <CardFooter className="justify-end">
-                <Button asChild variant="outline">
-                  <Link href={`/projects/${project.id}`}>詳細を開く</Link>
+                <Button asChild variant="outline" className="h-10">
+                  <Link href={`/projects/${project.id}`}>開く</Link>
                 </Button>
               </CardFooter>
             </Card>
