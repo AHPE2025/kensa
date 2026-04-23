@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
-import { DRAWING_IMAGES_BUCKET, DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
+import { DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
 
@@ -27,9 +27,9 @@ export async function GET(request: NextRequest, { params }: Params) {
       drawingId: drawing.id,
       fileName: drawing.file_name ?? null,
       filePath: drawing.file_path ?? null,
-      storagePath: drawing.storage_path ?? drawing.original_pdf_path ?? drawing.file_path ?? null,
+      storagePath: drawing.file_path ?? null,
       imageCount: Array.isArray(drawing.page_images) ? drawing.page_images.length : 0,
-      bucket: DRAWING_IMAGES_BUCKET,
+      bucket: 'drawings-pdf',
     })
   }
 
@@ -49,22 +49,28 @@ export async function GET(request: NextRequest, { params }: Params) {
     return NextResponse.json({ drawing: drawing ?? null, issues: [] })
   }
 
-  const pageImages = drawing && Array.isArray(drawing.page_images) ? (drawing.page_images as string[]) : []
-  const signedPageUrls = await Promise.all(
-    pageImages.map(async (path) => {
-      const { data } = await client.storage
-        .from(DRAWING_IMAGES_BUCKET)
-        .createSignedUrl(path, DRAWING_SIGNED_URL_TTL_SECONDS)
-      return data?.signedUrl ?? null
-    })
-  )
+  let signedUrl: string | null = null
+  if (drawing) {
+    console.log("drawing:", drawing)
+    console.log("resolved bucket:", "drawings-pdf")
+    console.log("resolved file_path:", drawing.file_path)
+    const { data, error } = await client.storage
+      .from('drawings-pdf')
+      .createSignedUrl(drawing.file_path, DRAWING_SIGNED_URL_TTL_SECONDS)
+    if (error) {
+      console.error("pdf signed url error:", error)
+    }
+    signedUrl = data?.signedUrl ?? null
+    console.log("signedUrl:", signedUrl)
+  }
   const drawingWithStoragePath = drawing
     ? {
         ...drawing,
-        storage_path: drawing.storage_path ?? drawing.original_pdf_path ?? drawing.file_path ?? null,
-        original_pdf_path: drawing.original_pdf_path ?? drawing.file_path ?? null,
-        page_images: pageImages,
-        signed_page_urls: signedPageUrls,
+        storage_path: drawing.file_path ?? null,
+        original_pdf_path: drawing.file_path ?? null,
+        page_images: Array.isArray(drawing.page_images) ? (drawing.page_images as string[]) : [],
+        signed_page_urls: [],
+        signed_url: signedUrl,
         file_name: drawing.file_name ?? null,
       }
     : null

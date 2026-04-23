@@ -3,6 +3,7 @@
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Download, Filter, MapPin, Move, Pencil, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { Document, Page, pdfjs } from 'react-pdf'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -27,6 +28,8 @@ type IssueForm = {
   issue_text: string
   contractor_id: string
 }
+
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 export default function DrawingEditorClient() {
   const params = useParams<{ id: string; drawingId: string }>()
@@ -53,6 +56,7 @@ export default function DrawingEditorClient() {
   const [contractors, setContractors] = useState<Contractor[]>([])
   const [pageIndex, setPageIndex] = useState(0)
   const [imageError, setImageError] = useState<string | null>(null)
+  const [pdfPageCount, setPdfPageCount] = useState(0)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
   const [saveAndContinue, setSaveAndContinue] = useState(false)
@@ -65,7 +69,6 @@ export default function DrawingEditorClient() {
   })
 
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const imageRef = useRef<HTMLImageElement | null>(null)
 
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
@@ -118,9 +121,10 @@ export default function DrawingEditorClient() {
 
   useEffect(() => {
     if (!currentDrawing) return
-    if (pageIndex < currentDrawing.page_count) return
-    setPageIndex(Math.max(currentDrawing.page_count - 1, 0))
-  }, [currentDrawing, pageIndex])
+    const totalPages = Math.max(pdfPageCount, currentDrawing.page_count ?? 0, 1)
+    if (pageIndex < totalPages) return
+    setPageIndex(Math.max(totalPages - 1, 0))
+  }, [currentDrawing, pageIndex, pdfPageCount])
 
   const filteredIssues = useMemo(() => {
     const key = searchText.trim().toLowerCase()
@@ -193,14 +197,12 @@ export default function DrawingEditorClient() {
   }
 
   const issueContractorName = (issue: Issue) => issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? ''
-  const currentPageImageUrl = currentDrawing?.signed_page_urls?.[pageIndex] ?? null
-  const hasNoPageImages = !currentDrawing || !currentDrawing.page_images || currentDrawing.page_images.length === 0
+  const pdfUrl = currentDrawing?.signed_url ?? null
+  const totalPages = Math.max(pdfPageCount, currentDrawing?.page_count ?? 0, 1)
 
   const handleDrawingClick = (event: MouseEvent<HTMLDivElement>) => {
     if (mode !== 'add') return
-    const imageElement = imageRef.current
-    if (!imageElement) return
-    const rect = imageElement.getBoundingClientRect()
+    const rect = event.currentTarget.getBoundingClientRect()
     const xRatio = (event.clientX - rect.left) / rect.width
     const yRatio = (event.clientY - rect.top) / rect.height
     if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) return
@@ -254,13 +256,13 @@ export default function DrawingEditorClient() {
             前ページ
           </Button>
           <span className="text-sm">
-            {pageIndex + 1} / {currentDrawing?.page_count ?? 1}
+            {pageIndex + 1} / {totalPages}
           </span>
           <Button
             variant="outline"
-            disabled={!currentDrawing || pageIndex >= currentDrawing.page_count - 1}
+            disabled={!currentDrawing || pageIndex >= totalPages - 1}
             onClick={() =>
-              setPageIndex((v) => Math.min(v + 1, (currentDrawing?.page_count ?? 1) - 1))
+              setPageIndex((v) => Math.min(v + 1, totalPages - 1))
             }
           >
             次ページ
@@ -316,30 +318,19 @@ export default function DrawingEditorClient() {
               <div className="flex h-full items-center justify-center p-6">
                 <Card className="max-w-md">
                   <CardHeader>
-                    <CardTitle>画像表示エラー</CardTitle>
+                    <CardTitle>PDF表示エラー</CardTitle>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">{imageError}</CardContent>
                 </Card>
               </div>
-            ) : hasNoPageImages ? (
+            ) : !pdfUrl ? (
               <div className="flex h-full items-center justify-center p-6">
                 <Card className="max-w-md">
                   <CardHeader>
-                    <CardTitle>画像変換未完了</CardTitle>
+                    <CardTitle>PDF表示エラー</CardTitle>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">
-                    この図面はページ画像が未生成です。再アップロードするか、変換処理ログを確認してください。
-                  </CardContent>
-                </Card>
-              </div>
-            ) : !currentPageImageUrl ? (
-              <div className="flex h-full items-center justify-center p-6">
-                <Card className="max-w-md">
-                  <CardHeader>
-                    <CardTitle>画像表示エラー</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm text-muted-foreground">
-                    ページ画像URLの取得に失敗しました。Storage設定と署名URL生成を確認してください。
+                    signed URLの取得に失敗しました
                   </CardContent>
                 </Card>
               </div>
@@ -350,18 +341,19 @@ export default function DrawingEditorClient() {
                   style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
                   onClick={handleDrawingClick}
                 >
-                  <img
-                    ref={imageRef}
-                    src={currentPageImageUrl}
-                    alt={`図面 ${pageIndex + 1}ページ`}
-                    className="block max-w-[1200px] select-none"
-                    draggable={false}
-                    onLoad={() => setImageError(null)}
-                    onError={() =>
-                      setImageError('図面画像を表示できません。画像ファイルまたはアクセス権限を確認してください。')
-                    }
+                  <Document
+                    file={pdfUrl}
+                    onLoadSuccess={({ numPages }) => {
+                      setPdfPageCount(numPages)
+                      setImageError(null)
+                    }}
+                    onLoadError={() => {
+                      setImageError('signed URLの取得に失敗しました')
+                    }}
+                    loading={<div className="p-6 text-sm text-muted-foreground">PDFを読み込み中...</div>}
                   >
-                  </img>
+                    <Page pageNumber={Math.min(pageIndex + 1, totalPages)} width={1100} />
+                  </Document>
                   <div className="pointer-events-none absolute inset-0">
                     {pageIssues.map((issue) => (
                       <button
