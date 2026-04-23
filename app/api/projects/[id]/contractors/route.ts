@@ -1,48 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAuthedClient } from '@/lib/api-auth'
+import { getAuthedClient, getAuthedUser } from '@/lib/api-auth'
 
 type Params = { params: Promise<{ id: string }> }
 
 export async function GET(request: NextRequest, { params }: Params) {
-  const authed = await getAuthedClient(request)
+  const authed = await getAuthedUser(request)
   if ('error' in authed) return authed.error
-  const { client, tenantId } = authed
+  const { client, user } = authed
   const { id: projectId } = await params
 
-  const { data: project, error: projectError } = await client
-    .from('projects')
-    .select('id')
-    .eq('id', projectId)
-    .eq('tenant_id', tenantId)
+  let tenantId: string | null = null
+  const { data: profile, error: profileError } = await client
+    .from('profiles')
+    .select('tenant_id')
+    .eq('id', user.id)
     .maybeSingle()
-  if (projectError) {
-    console.error('contractors project check error:', {
-      tenantId,
-      projectId,
-      error: projectError,
-    })
-    return NextResponse.json({ contractors: [] })
-  }
-  if (!project) {
-    console.error('contractors project not found:', { tenantId, projectId })
-    return NextResponse.json({ contractors: [] })
+
+  if (profileError) {
+    console.error("contractors load error:", { projectId, error: profileError })
+  } else {
+    tenantId = profile?.tenant_id ?? null
   }
 
-  const { data, error } = await client
-    .from('contractors')
-    .select('*')
-    .eq('tenant_id', tenantId)
-    .order('name', { ascending: true })
+  let contractors: unknown[] = []
 
-  if (error) {
-    console.error('contractors fetch error:', {
-      tenantId,
-      projectId,
-      error,
-    })
-    return NextResponse.json({ contractors: [] })
+  if (tenantId) {
+    const { data, error } = await client
+      .from('contractors')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('name', { ascending: true })
+    if (error) {
+      console.error("contractors load error:", { projectId, tenantId, error })
+    } else {
+      contractors = data ?? []
+    }
   }
-  return NextResponse.json({ contractors: data ?? [] })
+
+  // 開発用フォールバック: tenant_id で取れない/0件時は全件取得を許容
+  if (!tenantId || contractors.length === 0) {
+    const { data, error } = await client.from('contractors').select('*').order('name', { ascending: true })
+    if (error) {
+      console.error("contractors load error:", { projectId, tenantId, error })
+      return NextResponse.json({ contractors: [] })
+    }
+    contractors = data ?? []
+  }
+
+  console.log("contractors:", contractors)
+  return NextResponse.json({ contractors })
 }
 
 export async function POST(request: NextRequest, { params }: Params) {
