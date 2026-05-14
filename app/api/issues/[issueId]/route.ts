@@ -17,6 +17,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     'pin_y',
     'callout_x',
     'callout_y',
+    'issue_category',
     'issue_type',
     'issue_text',
     'contractor_id',
@@ -25,6 +26,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const updates: Record<string, unknown> = {}
   for (const key of allowed) {
     if (key in body) updates[key] = body[key]
+  }
+  if ('contractor_id' in updates) {
+    const contractorId = updates.contractor_id
+    updates.contractor_id = typeof contractorId === 'string' && contractorId.trim() ? contractorId : null
   }
   if ('x_ratio' in body) updates.pin_x = body.x_ratio
   if ('y_ratio' in body) updates.pin_y = body.y_ratio

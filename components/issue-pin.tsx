@@ -32,8 +32,12 @@ export function IssuePin({
   const pinY = issue.pin_y * stageHeight
   const calloutX = issue.callout_x * stageWidth
   const calloutY = issue.callout_y * stageHeight
-  const pinColor = isSelected ? '#dc2626' : '#2563eb'
-  const calloutBg = isSelected ? '#fee2e2' : '#eff6ff'
+  const isDone = issue.status === '完了' || issue.status === 'done'
+  const isInProgress = issue.status === '対応中'
+  const basePinColor = isDone ? '#16a34a' : isInProgress ? '#d97706' : '#2563eb'
+  const pinColor = isSelected ? '#dc2626' : basePinColor
+  const calloutBg = isSelected ? '#fee2e2' : isDone ? '#f0fdf4' : isInProgress ? '#fffbeb' : '#eff6ff'
+  const contractorLabel = issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
 
   return (
     <>
@@ -99,7 +103,7 @@ export function IssuePin({
           fontSize={11}
           lineHeight={1.3}
           fill="#0f172a"
-          text={`#${issue.no} ${issue.issue_type}\n${issue.issue_text.slice(0, 40)}`}
+          text={`#${issue.no} ${issue.issue_type}\n${issue.issue_text.slice(0, 30)}\n${contractorLabel}`}
         />
       </Label>
     </>

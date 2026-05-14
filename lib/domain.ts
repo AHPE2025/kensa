@@ -1,4 +1,4 @@
-export const ISSUE_TYPES = ['傷', '汚れ', '隙間', '浮き', '凹み', '調整', 'はがれ', '清掃'] as const
+export const ISSUE_TYPES = ['傷', '汚れ', '補修', '隙間', '浮き', '凹み', '調整', 'その他'] as const
 
 export type IssueType = (typeof ISSUE_TYPES)[number]
 
@@ -63,6 +63,7 @@ export type Issue = {
   pin_y: number
   callout_x: number
   callout_y: number
+  issue_category?: string | null
   issue_type: IssueType
   issue_text: string
   contractor_id: string | null

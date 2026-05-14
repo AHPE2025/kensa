@@ -93,6 +93,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     pin_y?: number
     callout_x?: number
     callout_y?: number
+    issue_category?: string | null
     issue_type?: string
     issue_text?: string
     contractor_id?: string | null
@@ -139,27 +140,48 @@ export async function POST(request: NextRequest, { params }: Params) {
   const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? (resolvedPinX + 0.05)
   const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? (resolvedPinY - 0.05)
   const resolvedContractorId = body.contractor_id && body.contractor_id.trim() ? body.contractor_id : null
+  const resolvedIssueCategory = body.issue_category?.trim() || null
 
-  const { data, error } = await client
+  const insertBase = {
+    tenant_id: tenantId,
+    project_id: drawing.project_id,
+    drawing_id: drawingId,
+    page_index: resolvedPageIndex,
+    floor_label: resolvedFloorLabel,
+    pin_x: resolvedPinX,
+    pin_y: resolvedPinY,
+    callout_x: resolvedCalloutX,
+    callout_y: resolvedCalloutY,
+    issue_type: issueType,
+    issue_text: issueText,
+    contractor_id: resolvedContractorId,
+    status: body.status ?? '未対応',
+    created_by: user.id,
+  }
+
+  let data: Record<string, unknown> | null = null
+  let error: { message: string } | null = null
+
+  const firstTry = await client
     .from('issues')
     .insert({
-      tenant_id: tenantId,
-      project_id: drawing.project_id,
-      drawing_id: drawingId,
-      page_index: resolvedPageIndex,
-      floor_label: resolvedFloorLabel,
-      pin_x: resolvedPinX,
-      pin_y: resolvedPinY,
-      callout_x: resolvedCalloutX,
-      callout_y: resolvedCalloutY,
-      issue_type: issueType,
-      issue_text: issueText,
-      contractor_id: resolvedContractorId,
-      status: body.status ?? 'open',
-      created_by: user.id,
+      ...insertBase,
+      issue_category: resolvedIssueCategory,
     })
     .select('*, contractor:contractors(id,name)')
     .single()
+  data = firstTry.data as Record<string, unknown> | null
+  error = firstTry.error
+
+  if (error && /issue_category/i.test(error.message)) {
+    const fallbackTry = await client
+      .from('issues')
+      .insert(insertBase)
+      .select('*, contractor:contractors(id,name)')
+      .single()
+    data = fallbackTry.data as Record<string, unknown> | null
+    error = fallbackTry.error
+  }
 
   if (error) {
     console.error('create issue error:', error)

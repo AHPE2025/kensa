@@ -70,6 +70,7 @@ export function IssueListPanel({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全業者</SelectItem>
+            <SelectItem value="__none__">業者未定</SelectItem>
             {contractors.map((contractor) => (
               <SelectItem key={contractor.id} value={contractor.id}>
                 {contractor.name}
@@ -120,7 +121,11 @@ export function IssueListPanel({
         <div className="flex flex-col">
           {issues.map((issue) => {
             const contractorName =
-              issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? '未選択'
+              issue.issue_category === 'common'
+                ? '共通指摘'
+                : issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? '業者未定'
+            const isDone = issue.status === '完了' || issue.status === 'done'
+            const isInProgress = issue.status === '対応中'
             return (
               <button
                 key={issue.id}
@@ -142,11 +147,19 @@ export function IssueListPanel({
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                     {issue.issue_type}
                   </Badge>
-                  {issue.status === 'done' ? (
+                  {isDone ? (
                     <Badge variant="default" className="ml-auto bg-green-600 px-1.5 py-0 text-[10px] text-white">
                       完了
                     </Badge>
-                  ) : null}
+                  ) : isInProgress ? (
+                    <Badge variant="secondary" className="ml-auto bg-amber-100 px-1.5 py-0 text-[10px] text-amber-700">
+                      対応中
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="ml-auto px-1.5 py-0 text-[10px]">
+                      未対応
+                    </Badge>
+                  )}
                 </div>
                 <p className="line-clamp-2 text-xs leading-relaxed text-foreground">
                   {issue.issue_text}

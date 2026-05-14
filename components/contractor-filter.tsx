@@ -42,6 +42,24 @@ export function ContractorFilter({
 
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-1 p-3">
+          <div className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-accent/50">
+            <Checkbox
+              id="vis-unassigned"
+              checked={visibleContractorIds.has('__none__')}
+              onCheckedChange={() => onToggle('__none__')}
+            />
+            <Label htmlFor="vis-unassigned" className="flex-1 cursor-pointer text-sm">
+              業者未定
+            </Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[10px] text-muted-foreground"
+              onClick={() => onShowOnly('__none__')}
+            >
+              のみ
+            </Button>
+          </div>
           {contractors.map((contractor) => {
             const isVisible = visibleContractorIds.has(contractor.id)
             return (

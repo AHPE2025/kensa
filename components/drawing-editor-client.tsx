@@ -41,6 +41,7 @@ type IssueFormValues = {
   issue_type: string
   issue_text: string
   contractor_id: string
+  issue_category: string
   status: string
 }
 
@@ -103,7 +104,7 @@ export default function DrawingEditorClient() {
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
-  const [sidebarTab, setSidebarTab] = useState<'issues' | 'contractors'>('issues')
+  const [sidebarTab, setSidebarTab] = useState<'issues' | 'contractors' | 'exports'>('issues')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [editingIssue, setEditingIssue] = useState<Issue | null>(null)
@@ -117,6 +118,9 @@ export default function DrawingEditorClient() {
     issueType: 'all',
     floorLabel: 'all',
   })
+  const [exportTarget, setExportTarget] = useState<'all' | 'unassigned' | 'contractor'>('all')
+  const [exportContractorId, setExportContractorId] = useState<string>('all')
+  const [exportContentType, setExportContentType] = useState<'list' | 'drawing_and_list'>('list')
 
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -202,6 +206,14 @@ export default function DrawingEditorClient() {
     console.log("rotation:", rotation)
   }, [rotation])
 
+  useEffect(() => {
+    console.log('issues:', issues)
+  }, [issues])
+
+  useEffect(() => {
+    console.log('selected contractor filter:', listFilters.contractorId)
+  }, [listFilters.contractorId])
+
   const numberedIssues = useMemo(() => {
     const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
     return sorted.map((issue, index) => ({ ...issue, no: index + 1 }))
@@ -219,7 +231,8 @@ export default function DrawingEditorClient() {
       if (listFilters.issueType !== 'all' && issue.issue_type !== listFilters.issueType) return false
       if (listFilters.floorLabel !== 'all' && issue.floor_label !== listFilters.floorLabel) return false
       if (!key) return true
-      const contractorName = issue.contractor?.name ?? ''
+      const contractorName =
+        issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
       return `${issue.issue_text}${issue.issue_type}${contractorName}${issue.floor_label}`.toLowerCase().includes(key)
     })
   }, [listFilters, numberedIssues, pageIndex, visibleContractorIds])
@@ -244,6 +257,7 @@ export default function DrawingEditorClient() {
           floor_label: values.floor_label || currentDrawing.floor_label,
           issue_type: values.issue_type,
           issue_text: values.issue_text.trim(),
+          issue_category: values.issue_category || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id
@@ -252,7 +266,7 @@ export default function DrawingEditorClient() {
           pin_y: addingPin.y,
           callout_x: addingPin.x + 0.05,
           callout_y: addingPin.y - 0.05,
-          status: values.status || 'open',
+          status: values.status || '未対応',
         }
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
 
@@ -293,11 +307,12 @@ export default function DrawingEditorClient() {
           floor_label: values.floor_label || currentDrawing?.floor_label,
           issue_type: values.issue_type,
           issue_text: values.issue_text.trim(),
+          issue_category: values.issue_category || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id
               : null,
-          status: values.status || 'open',
+          status: values.status || '未対応',
         }
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
         const response = await authedFetch(`/api/issues/${targetIssue.id}`, {
@@ -305,10 +320,13 @@ export default function DrawingEditorClient() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         })
-        const data = (await response.json()) as { issue?: Issue; error?: string; missing?: string[] }
+      const data = (await response.json()) as { issue?: Issue; error?: string; missing?: string[] }
         if (!response.ok || !data.issue) {
+          const errorMessage = Array.isArray(data.missing) && data.missing.length > 0
+            ? `${data.error ?? '更新に失敗しました'}: ${data.missing.join(', ')}`
+            : data.error ?? '更新に失敗しました'
           console.error('create issue error:', data.error ?? data)
-          toast.error(data.error ?? '更新に失敗しました')
+          toast.error(errorMessage)
           return
         }
         await refetchIssues()
@@ -452,12 +470,13 @@ export default function DrawingEditorClient() {
           <aside className="w-80 border-r bg-white">
             <Tabs
               value={sidebarTab}
-              onValueChange={(value) => setSidebarTab(value as 'issues' | 'contractors')}
+              onValueChange={(value) => setSidebarTab(value as 'issues' | 'contractors' | 'exports')}
               className="flex h-full flex-col"
             >
-              <TabsList className="mx-3 mt-3 grid h-10 grid-cols-2">
+              <TabsList className="mx-3 mt-3 grid h-10 grid-cols-3">
                 <TabsTrigger value="issues">指摘一覧</TabsTrigger>
                 <TabsTrigger value="contractors">業者表示</TabsTrigger>
+                <TabsTrigger value="exports">出力</TabsTrigger>
               </TabsList>
               <TabsContent value="issues" className="mt-3 min-h-0 flex-1">
                 <IssueListPanel
@@ -493,6 +512,65 @@ export default function DrawingEditorClient() {
                   }
                   onShowOnly={(contractorId) => setVisibleContractorIds(new Set([contractorId]))}
                 />
+              </TabsContent>
+              <TabsContent value="exports" className="mt-3 min-h-0 flex-1">
+                <div className="space-y-3 px-3">
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm">業者ごとの指摘一覧出力</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium">出力対象</p>
+                        <Tabs value={exportTarget} onValueChange={(v) => setExportTarget(v as typeof exportTarget)}>
+                          <TabsList className="grid w-full grid-cols-3">
+                            <TabsTrigger value="all">全業者</TabsTrigger>
+                            <TabsTrigger value="contractor">特定業者</TabsTrigger>
+                            <TabsTrigger value="unassigned">業者未定</TabsTrigger>
+                          </TabsList>
+                        </Tabs>
+                        {exportTarget === 'contractor' ? (
+                          <select
+                            className="h-9 w-full rounded-md border px-2 text-sm"
+                            value={exportContractorId}
+                            onChange={(event) => setExportContractorId(event.target.value)}
+                          >
+                            <option value="all">業者を選択</option>
+                            {contractors.map((contractor) => (
+                              <option key={contractor.id} value={contractor.id}>
+                                {contractor.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium">出力内容</p>
+                        <Tabs
+                          value={exportContentType}
+                          onValueChange={(v) => setExportContentType(v as typeof exportContentType)}
+                        >
+                          <TabsList className="grid w-full grid-cols-2">
+                            <TabsTrigger value="list">指摘一覧のみ</TabsTrigger>
+                            <TabsTrigger value="drawing_and_list">図面＋指摘一覧</TabsTrigger>
+                          </TabsList>
+                        </Tabs>
+                      </div>
+                      <Button
+                        className="w-full bg-blue-600 hover:bg-blue-700"
+                        onClick={() =>
+                          console.log('pdf export condition:', {
+                            exportTarget,
+                            exportContractorId,
+                            exportContentType,
+                          })
+                        }
+                      >
+                        PDF出力
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </div>
               </TabsContent>
             </Tabs>
           </aside>
@@ -597,7 +675,13 @@ export default function DrawingEditorClient() {
               <Filter className="mr-2 h-5 w-5" />
               業者フィルタ
             </Button>
-            <Button className="h-12 bg-blue-600 hover:bg-blue-700" onClick={() => router.push(`/projects/${projectId}`)}>
+            <Button
+              className="h-12 bg-blue-600 hover:bg-blue-700"
+              onClick={() => {
+                setSidebarOpen(true)
+                setSidebarTab('exports')
+              }}
+            >
               <Download className="mr-2 h-5 w-5" />
               PDF出力
             </Button>
@@ -629,7 +713,8 @@ export default function DrawingEditorClient() {
           issue_type: editingIssue?.issue_type ?? ISSUE_TYPES[0],
           issue_text: editingIssue?.issue_text ?? '',
           contractor_id: editingIssue?.contractor_id ?? '',
-          status: editingIssue?.status ?? 'open',
+          issue_category: editingIssue?.issue_category ?? '',
+          status: editingIssue?.status === 'done' ? '完了' : editingIssue?.status ?? '未対応',
         }}
         onClose={() => {
           setIssueModalOpen(false)

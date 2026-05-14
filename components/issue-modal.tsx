@@ -19,7 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Checkbox } from '@/components/ui/checkbox'
 import { ISSUE_TYPES, type Contractor } from '@/lib/domain'
 import { Search } from 'lucide-react'
 
@@ -28,6 +27,7 @@ type IssueFormValues = {
   issue_type: string
   issue_text: string
   contractor_id: string
+  issue_category: string
   status: string
 }
 
@@ -77,6 +77,9 @@ export function IssueModal({
     if (!onSaveAndNext) return
     onSaveAndNext(form)
   }
+
+  const selectedContractorValue =
+    form.issue_category === 'common' ? '__common__' : form.contractor_id || '__unassigned__'
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -146,16 +149,25 @@ export function IssueModal({
               />
             </div>
             <Select
-              value={form.contractor_id || '__none__'}
-              onValueChange={(value) =>
-                setForm((prev) => ({ ...prev, contractor_id: value === '__none__' ? '' : value }))
-              }
+              value={selectedContractorValue}
+              onValueChange={(value) => {
+                if (value === '__unassigned__') {
+                  setForm((prev) => ({ ...prev, contractor_id: '', issue_category: '' }))
+                  return
+                }
+                if (value === '__common__') {
+                  setForm((prev) => ({ ...prev, contractor_id: '', issue_category: 'common' }))
+                  return
+                }
+                setForm((prev) => ({ ...prev, contractor_id: value, issue_category: '' }))
+              }}
             >
               <SelectTrigger className="h-11">
                 <SelectValue placeholder="担当業者を選択" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">未選択</SelectItem>
+                <SelectItem value="__unassigned__">業者未定</SelectItem>
+                <SelectItem value="__common__">共通</SelectItem>
                 {filteredContractors.map((contractor) => (
                   <SelectItem key={contractor.id} value={contractor.id}>
                     {contractor.name}
@@ -170,17 +182,36 @@ export function IssueModal({
             </Select>
           </div>
 
-          <div className="flex items-center gap-2 rounded-md border p-3">
-            <Checkbox
-              id="issue-done"
-              checked={form.status === 'done'}
-              onCheckedChange={(checked) =>
-                setForm((prev) => ({ ...prev, status: checked ? 'done' : 'open' }))
-              }
-            />
-            <Label htmlFor="issue-done" className="cursor-pointer">
-              完了状態（任意）
-            </Label>
+          <div className="flex flex-col gap-2">
+            <Label className="font-medium">状態</Label>
+            <Select
+              value={form.status}
+              onValueChange={(value) => setForm((prev) => ({ ...prev, status: value }))}
+            >
+              <SelectTrigger className="h-11">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="未対応">未対応</SelectItem>
+                <SelectItem value="対応中">対応中</SelectItem>
+                <SelectItem value="完了">完了</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-md border border-dashed p-3">
+              <Label className="mb-2 block font-medium">ビフォー写真</Label>
+              <div className="flex h-20 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
+                UI枠のみ（後続実装）
+              </div>
+            </div>
+            <div className="rounded-md border border-dashed p-3">
+              <Label className="mb-2 block font-medium">アフター写真</Label>
+              <div className="flex h-20 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
+                UI枠のみ（後続実装）
+              </div>
+            </div>
           </div>
         </div>
 
