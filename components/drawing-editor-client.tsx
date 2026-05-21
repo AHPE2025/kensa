@@ -232,7 +232,7 @@ export default function DrawingEditorClient() {
       if (!key) return true
       const contractorName =
         issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
-      return `${issue.issue_text}${issue.issue_type}${contractorName}${issue.floor_label}`.toLowerCase().includes(key)
+      return `${issue.issue_text ?? ''}${issue.issue_type}${contractorName}${issue.floor_label}`.toLowerCase().includes(key)
     })
   }, [listFilters, numberedIssues, pageIndex, visibleContractorIds])
 
@@ -255,7 +255,7 @@ export default function DrawingEditorClient() {
           page_index: pageIndex ?? 0,
           floor_label: currentDrawing.floor_label ?? '1F',
           issue_type: values.issue_type,
-          issue_text: values.issue_text.trim(),
+          issue_text: values.issue_text.trim() || null,
           issue_category: values.issue_category || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
@@ -306,7 +306,7 @@ export default function DrawingEditorClient() {
         const payload = {
           floor_label: currentDrawing?.floor_label ?? '1F',
           issue_type: values.issue_type,
-          issue_text: values.issue_text.trim(),
+          issue_text: values.issue_text.trim() || null,
           issue_category: values.issue_category || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)

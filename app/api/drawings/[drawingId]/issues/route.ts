@@ -119,13 +119,12 @@ export async function POST(request: NextRequest, { params }: Params) {
   const resolvedPinX = body.pin_x ?? body.x_ratio
   const resolvedPinY = body.pin_y ?? body.y_ratio
   const issueType = body.issue_type?.trim()
-  const issueText = body.issue_text?.trim()
+  const issueText = body.issue_text?.trim() || null
 
   const missing: string[] = []
   if (resolvedPinX === undefined) missing.push('pin_x')
   if (resolvedPinY === undefined) missing.push('pin_y')
   if (!issueType) missing.push('issue_type')
-  if (!issueText) missing.push('issue_text')
 
   if (missing.length > 0) {
     console.error('create issue error:', { error: '必須項目が不足しています', missing })

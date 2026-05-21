@@ -162,7 +162,7 @@ export function IssueListPanel({
                   )}
                 </div>
                 <p className="line-clamp-2 text-xs leading-relaxed text-foreground">
-                  {issue.issue_text}
+                  {issue.issue_text?.trim() ? issue.issue_text : '未入力'}
                 </p>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[10px] text-muted-foreground">{contractorName}</p>

@@ -202,7 +202,6 @@ export function IssueModal({
               type="button"
               variant="secondary"
               onClick={handleSaveAndNext}
-              disabled={!form.issue_text.trim()}
               className="h-11"
             >
               保存して次を追加
@@ -211,7 +210,6 @@ export function IssueModal({
           <Button
             type="button"
             onClick={handleSave}
-            disabled={!form.issue_text.trim()}
             className="h-11 bg-blue-600 hover:bg-blue-700"
           >
             {submitLabel}

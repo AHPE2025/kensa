@@ -31,6 +31,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const contractorId = updates.contractor_id
     updates.contractor_id = typeof contractorId === 'string' && contractorId.trim() ? contractorId : null
   }
+  if ('issue_text' in updates) {
+    const issueText = updates.issue_text
+    updates.issue_text = typeof issueText === 'string' && issueText.trim() ? issueText.trim() : null
+  }
   if ('x_ratio' in body) updates.pin_x = body.x_ratio
   if ('y_ratio' in body) updates.pin_y = body.y_ratio
   if ('callout_x_ratio' in body) updates.callout_x = body.callout_x_ratio

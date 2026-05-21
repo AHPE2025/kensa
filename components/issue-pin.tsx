@@ -103,7 +103,7 @@ export function IssuePin({
           fontSize={11}
           lineHeight={1.3}
           fill="#0f172a"
-          text={`#${issue.no} ${issue.issue_type}\n${issue.issue_text.slice(0, 30)}\n${contractorLabel}`}
+          text={`#${issue.no} ${issue.issue_type}\n${issue.issue_text?.trim() ? issue.issue_text.slice(0, 30) : '未入力'}\n${contractorLabel}`}
         />
       </Label>
     </>
