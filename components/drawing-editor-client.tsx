@@ -413,6 +413,7 @@ export default function DrawingEditorClient() {
       } = pdfExportSplit
 
       console.log('pdf export condition:', exportCondition)
+      console.log('pdf export issues:', drawingIssues)
       console.log('selected contractor:', selectedContractor)
       console.log('selected issues:', selectedIssues)
       console.log('common issues:', commonIssues)
@@ -424,6 +425,7 @@ export default function DrawingEditorClient() {
       }
 
       const drawingTarget = drawingExportRef.current
+      console.log('pdf export target:', drawingTarget)
       if (exportContentType === 'drawing_and_list' && !drawingTarget) {
         throw new Error('PDF出力対象が見つかりません')
       }

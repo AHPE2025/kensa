@@ -1,6 +1,6 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
-import type { Issue } from '@/lib/domain'
+import type { Contractor, Issue } from '@/lib/domain'
 
 export type PdfExportCondition = {
   exportTarget: 'all' | 'unassigned' | 'contractor'
@@ -11,46 +11,88 @@ export type PdfExportCondition = {
 export type PdfExportMeta = {
   projectName: string
   address: string
-  contractorLabel: string
+  inspectionDate: string
   exportDate: string
+  contractorLabel: string
 }
 
-type NumberedIssue = Issue & { no: number }
+export type NumberedIssue = Issue & { no: number }
+
+export type PdfExportSplit = {
+  selectedIssues: NumberedIssue[]
+  commonIssues: NumberedIssue[]
+  drawingIssues: NumberedIssue[]
+  separateCommonPage: boolean
+  selectedContractor: Contractor | null
+  exportContractorLabel: string
+}
 
 function formatExportTimestamp(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
 }
 
-function issueContractorLabel(issue: Issue): string {
-  if (issue.issue_category === 'common') return 'Common'
-  return issue.contractor?.name ?? 'Unassigned'
+export function isCommonIssue(issue: Issue): boolean {
+  if (issue.issue_category === 'common') return true
+  if (issue.contractor?.name === '共通') return true
+  return false
 }
 
-function issueStatusLabel(status: string): string {
-  if (status === 'done' || status === '完了') return 'Done'
-  return 'Open'
+export function isUnassignedIssue(issue: Issue): boolean {
+  return issue.contractor_id === null && !isCommonIssue(issue)
 }
 
-function issueTextLabel(text: string | null): string {
-  const trimmed = text?.trim()
-  return trimmed ? trimmed.slice(0, 40) : 'N/A'
+export function splitIssuesForPdfExport(
+  issues: NumberedIssue[],
+  condition: PdfExportCondition,
+  contractors: Contractor[],
+): PdfExportSplit {
+  const commonIssues = issues.filter(isCommonIssue)
+  let selectedIssues: NumberedIssue[]
+  let exportContractorLabel: string
+  let selectedContractor: Contractor | null = null
+  let separateCommonPage = false
+
+  if (condition.exportTarget === 'unassigned') {
+    selectedIssues = issues.filter(isUnassignedIssue)
+    exportContractorLabel = '業者未定'
+    separateCommonPage = commonIssues.length > 0
+  } else if (condition.exportTarget === 'contractor' && condition.exportContractorId !== 'all') {
+    selectedContractor = contractors.find((item) => item.id === condition.exportContractorId) ?? null
+    exportContractorLabel = selectedContractor?.name ?? '担当業者'
+    selectedIssues = issues.filter(
+      (issue) => !isCommonIssue(issue) && issue.contractor_id === condition.exportContractorId,
+    )
+    separateCommonPage = commonIssues.length > 0
+  } else {
+    selectedIssues = issues
+    exportContractorLabel = '全業者'
+    separateCommonPage = false
+  }
+
+  const drawingIssues = separateCommonPage
+    ? [...selectedIssues, ...commonIssues]
+    : selectedIssues
+
+  return {
+    selectedIssues,
+    commonIssues,
+    drawingIssues,
+    separateCommonPage,
+    selectedContractor,
+    exportContractorLabel,
+  }
 }
 
+/** @deprecated Use splitIssuesForPdfExport — kept for any external callers */
 export function filterIssuesForExport(
   issues: NumberedIssue[],
   condition: PdfExportCondition,
 ): NumberedIssue[] {
-  if (condition.exportTarget === 'unassigned') {
-    return issues.filter((issue) => issue.contractor_id === null)
-  }
-  if (condition.exportTarget === 'contractor' && condition.exportContractorId !== 'all') {
-    return issues.filter((issue) => issue.contractor_id === condition.exportContractorId)
-  }
-  return issues
+  return splitIssuesForPdfExport(issues, condition, []).drawingIssues
 }
 
-export async function captureDrawingElement(element: HTMLElement): Promise<string> {
+export async function captureElement(element: HTMLElement): Promise<string> {
   const canvas = await html2canvas(element, {
     scale: 2,
     useCORS: true,
@@ -73,69 +115,13 @@ export async function captureDrawingElement(element: HTMLElement): Promise<strin
   return canvas.toDataURL('image/png')
 }
 
-function addSummaryPage(pdf: jsPDF, meta: PdfExportMeta, issues: NumberedIssue[]) {
-  const margin = 10
-  let y = margin
+/** @deprecated Use captureElement */
+export const captureDrawingElement = captureElement
 
-  pdf.setFont('helvetica', 'bold')
-  pdf.setFontSize(18)
-  pdf.text('Inspection Report', margin, y)
-  y += 12
-
-  pdf.setFont('helvetica', 'normal')
-  pdf.setFontSize(10)
-  const lines = [
-    `Project: ${meta.projectName}`,
-    `Address: ${meta.address}`,
-    `Date: ${meta.exportDate}`,
-    `Contractor: ${meta.contractorLabel}`,
-    `Issue Count: ${issues.length}`,
-  ]
-  for (const line of lines) {
-    pdf.text(line, margin, y)
-    y += 6
-  }
-  y += 4
-
-  const headers = ['No', 'Floor', 'Type', 'Text', 'Contractor', 'Status']
-  const colX = [margin, 22, 40, 58, 118, 168]
-  pdf.setFont('helvetica', 'bold')
-  pdf.setFontSize(9)
-  headers.forEach((header, index) => pdf.text(header, colX[index], y))
-  y += 5
-  pdf.setFont('helvetica', 'normal')
-  pdf.setFontSize(8)
-
-  const pageHeight = pdf.internal.pageSize.getHeight()
-  for (const issue of issues) {
-    if (y > pageHeight - margin) {
-      pdf.addPage()
-      y = margin
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(9)
-      headers.forEach((header, index) => pdf.text(header, colX[index], y))
-      y += 5
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(8)
-    }
-    const row = [
-      String(issue.no),
-      issue.floor_label,
-      issue.issue_type,
-      issueTextLabel(issue.issue_text),
-      issueContractorLabel(issue),
-      issueStatusLabel(issue.status),
-    ]
-    row.forEach((cell, index) => pdf.text(cell, colX[index], y))
-    y += 5
-  }
-}
-
-function addDrawingPage(pdf: jsPDF, imageData: string) {
-  pdf.addPage()
+function addImageFitPage(pdf: jsPDF, imageData: string): Promise<void> {
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
-  const margin = 10
+  const margin = 8
   const maxWidth = pageWidth - margin * 2
   const maxHeight = pageHeight - margin * 2
 
@@ -151,15 +137,23 @@ function addDrawingPage(pdf: jsPDF, imageData: string) {
       pdf.addImage(imageData, 'PNG', x, y, width, height)
       resolve()
     }
-    image.onerror = () => reject(new Error('Failed to load drawing capture'))
+    image.onerror = () => reject(new Error('Failed to load captured image'))
   })
 }
 
+async function addCapturedPage(pdf: jsPDF, imageData: string, isFirstPage: boolean) {
+  if (!isFirstPage) {
+    pdf.addPage('a4', 'landscape')
+  }
+  await addImageFitPage(pdf, imageData)
+}
+
 export async function buildInspectionReportPdf(options: {
-  meta: PdfExportMeta
-  issues: NumberedIssue[]
-  condition: PdfExportCondition
+  selectedTableImage?: string | null
+  commonTableImage?: string | null
   drawingImageData?: string | null
+  includeDrawing: boolean
+  hasCommonPage: boolean
 }): Promise<{ blob: Blob; filename: string }> {
   const pdf = new jsPDF({
     orientation: 'landscape',
@@ -167,10 +161,20 @@ export async function buildInspectionReportPdf(options: {
     format: 'a4',
   })
 
-  addSummaryPage(pdf, options.meta, options.issues)
+  let pageCount = 0
 
-  if (options.condition.exportContentType === 'drawing_and_list' && options.drawingImageData) {
-    await addDrawingPage(pdf, options.drawingImageData)
+  if (options.selectedTableImage) {
+    await addCapturedPage(pdf, options.selectedTableImage, pageCount === 0)
+    pageCount += 1
+  }
+
+  if (options.hasCommonPage && options.commonTableImage) {
+    await addCapturedPage(pdf, options.commonTableImage, pageCount === 0)
+    pageCount += 1
+  }
+
+  if (options.includeDrawing && options.drawingImageData) {
+    await addCapturedPage(pdf, options.drawingImageData, pageCount === 0)
   }
 
   const filename = `inspection_report_${formatExportTimestamp(new Date())}.pdf`
