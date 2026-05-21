@@ -413,7 +413,7 @@ export default function DrawingEditorClient() {
 
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
 
-        const response = await authedFetch(`/api/issues/${targetIssue.id}`, {
+        const response = await authedFetch(`/api/drawings/${drawingId}/issues/${targetIssue.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -440,16 +440,19 @@ export default function DrawingEditorClient() {
         toast.error('更新に失敗しました')
       }
     },
-    [currentDrawing?.floor_label, isFallbackContractor, parseApiResponse, refetchIssues],
+    [currentDrawing?.floor_label, drawingId, isFallbackContractor, parseApiResponse, refetchIssues],
   )
 
   const deleteIssue = async () => {
     if (!selectedIssueId) return
     try {
-      const response = await authedFetch(`/api/issues/${selectedIssueId}`, { method: 'DELETE' })
+      console.log('delete issue:', selectedIssueId)
+      const response = await authedFetch(`/api/drawings/${drawingId}/issues/${selectedIssueId}`, {
+        method: 'DELETE',
+      })
       const data = (await response.json()) as { error?: string }
       if (!response.ok) {
-        console.error('create issue error:', data.error ?? data)
+        console.error('delete issue error:', data.error ?? data)
         toast.error(data.error ?? '削除失敗')
         return
       }
@@ -457,7 +460,7 @@ export default function DrawingEditorClient() {
       setSelectedIssueId(null)
       toast.success('指摘を削除しました')
     } catch (error) {
-      console.error('create issue error:', error)
+      console.error('delete issue error:', error)
       toast.error('削除失敗')
     } finally {
       setDeleteConfirmOpen(false)
@@ -474,21 +477,61 @@ export default function DrawingEditorClient() {
     setIssueModalOpen(true)
   }
 
+  const requestDeleteIssue = (issue: Issue) => {
+    setSelectedIssueId(issue.id)
+    setDeleteConfirmOpen(true)
+  }
+
+  const updatePinPosition = useCallback(
+    async (issueId: string, pinX: number, pinY: number) => {
+      console.log('move issue pin:', {
+        issueId,
+        pin_x: pinX,
+        pin_y: pinY,
+      })
+      try {
+        const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin_x: pinX, pin_y: pinY }),
+        })
+        const data = (await response.json()) as { error?: string }
+        if (!response.ok) {
+          console.error('update issue position error:', data.error ?? data)
+          return
+        }
+        await refetchIssues()
+      } catch (error) {
+        console.error('update issue position error:', error)
+      }
+    },
+    [drawingId, refetchIssues],
+  )
+
   const updateCalloutPosition = useCallback(
     async (issueId: string, calloutX: number, calloutY: number) => {
-      const response = await authedFetch(`/api/issues/${issueId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callout_x: calloutX, callout_y: calloutY }),
+      console.log('move issue callout:', {
+        issueId,
+        callout_x: calloutX,
+        callout_y: calloutY,
       })
-      const data = (await response.json()) as { error?: string }
-      if (!response.ok) {
-        console.error('create issue error:', data.error ?? data)
-        return
+      try {
+        const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callout_x: calloutX, callout_y: calloutY }),
+        })
+        const data = (await response.json()) as { error?: string }
+        if (!response.ok) {
+          console.error('update issue position error:', data.error ?? data)
+          return
+        }
+        await refetchIssues()
+      } catch (error) {
+        console.error('update issue position error:', error)
       }
-      await refetchIssues()
     },
-    [refetchIssues],
+    [drawingId, refetchIssues],
   )
 
   const pdfUrl = currentDrawing?.signed_url ?? null
@@ -534,10 +577,17 @@ export default function DrawingEditorClient() {
     }
   }, [recalculateFitScale])
 
-  const handleStageClick = useCallback((event: { target: { getStage: () => { getPointerPosition: () => { x: number; y: number } | null } | null } }) => {
-    if (mode !== 'add') return
+  const handleStageClick = useCallback((event: { target: { getStage: () => unknown; getPointerPosition?: () => { x: number; y: number } | null } }) => {
     const stage = event.target.getStage()
-    const pointer = stage?.getPointerPosition()
+    const clickedOnEmpty = event.target === stage
+    if (mode === 'edit') {
+      if (clickedOnEmpty) {
+        setSelectedIssueId(null)
+      }
+      return
+    }
+    if (mode !== 'add' || !clickedOnEmpty) return
+    const pointer = (stage as { getPointerPosition: () => { x: number; y: number } | null } | null)?.getPointerPosition()
     if (!pointer) return
     const xRatio = pointer.x / stageWidth
     const yRatio = pointer.y / stageHeight
@@ -743,11 +793,13 @@ export default function DrawingEditorClient() {
                               stageWidth={stageWidth}
                               stageHeight={stageHeight}
                               isSelected={selectedIssueId === issue.id}
-                              canDragCallout={mode === 'edit'}
+                              canDrag={mode === 'edit'}
                               onSelect={(selectedIssue) => {
                                 jumpToIssue(selectedIssue)
-                                if (mode === 'edit') startEditIssue(selectedIssue)
                               }}
+                              onEdit={startEditIssue}
+                              onDeleteRequest={requestDeleteIssue}
+                              onDragPin={updatePinPosition}
                               onDragCallout={updateCalloutPosition}
                             />
                           )
@@ -790,7 +842,7 @@ export default function DrawingEditorClient() {
               variant="destructive"
               className="h-12"
               onClick={() => setDeleteConfirmOpen(true)}
-              disabled={!selectedIssueId}
+              disabled={mode !== 'edit' || !selectedIssueId}
             >
               <Trash2 className="mr-2 h-5 w-5" />
               選択削除
@@ -842,7 +894,7 @@ export default function DrawingEditorClient() {
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>指摘を削除しますか？</AlertDialogTitle>
+            <AlertDialogTitle>この指摘を削除しますか？</AlertDialogTitle>
             <AlertDialogDescription>
               選択した指摘を削除します。この操作は取り消せません。
             </AlertDialogDescription>

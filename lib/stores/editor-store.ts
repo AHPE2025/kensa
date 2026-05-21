@@ -3,7 +3,7 @@
 import { create } from 'zustand'
 import type { Issue } from '@/lib/domain'
 
-export type EditorMode = 'move' | 'add' | 'edit'
+export type EditorMode = 'view' | 'add' | 'edit'
 
 type EditorStore = {
   mode: EditorMode
@@ -23,7 +23,7 @@ type EditorStore = {
 }
 
 export const useEditorStore = create<EditorStore>((set) => ({
-  mode: 'move',
+  mode: 'view',
   zoom: 1,
   pan: { x: 0, y: 0 },
   contractorFilter: 'all',

@@ -2,7 +2,6 @@
 
 import {
   ArrowLeft,
-  Hand,
   MapPin,
   Pencil,
   RefreshCw,
@@ -126,16 +125,12 @@ export function DrawingToolbar({
 
       <ToggleGroup
         type="single"
-        value={mode}
+        value={mode === 'add' || mode === 'edit' ? mode : ''}
         onValueChange={(value) => {
-          if (value) onChangeMode(value as EditorMode)
+          onChangeMode(value ? (value as EditorMode) : 'view')
         }}
         className="gap-1"
       >
-        <ToggleGroupItem value="move" aria-label="移動モード" className="h-9 gap-1.5 px-3 text-xs">
-          <Hand className="h-4 w-4" />
-          <span className="hidden sm:inline">移動</span>
-        </ToggleGroupItem>
         <ToggleGroupItem value="add" aria-label="ピン追加モード" className="h-9 gap-1.5 px-3 text-xs">
           <MapPin className="h-4 w-4" />
           <span className="hidden sm:inline">ピン追加</span>
