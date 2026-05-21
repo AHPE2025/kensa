@@ -65,6 +65,9 @@ export type Drawing = {
   original_pdf_path?: string | null
   page_images?: string[] | null
   page_count: number
+  rotation?: number
+  zoom?: number
+  view_updated_at?: string | null
   created_at: string
 }
 

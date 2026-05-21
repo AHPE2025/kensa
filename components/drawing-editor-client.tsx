@@ -23,7 +23,14 @@ import { createTempIssueFolderId } from '@/lib/issue-photo-paths'
 import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
-import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues } from '@/lib/domain'
+import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type Project } from '@/lib/domain'
+import {
+  buildInspectionReportPdf,
+  captureDrawingElement,
+  downloadPdfBlob,
+  filterIssuesForExport,
+  type PdfExportCondition,
+} from '@/lib/pdf-export-client'
 import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel } from '@/components/issue-list-panel'
@@ -67,6 +74,27 @@ const FALLBACK_CONTRACTORS: Contractor[] = FALLBACK_CONTRACTOR_NAMES.map((name, 
 }))
 
 const UNASSIGNED_CONTRACTOR_KEY = '__none__'
+
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 2.5
+const ZOOM_SAVE_DEBOUNCE_MS = 400
+
+function clampZoom(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return 1
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, numeric))
+}
+
+function normalizeRotation(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return 0
+  const normalized = ((numeric % 360) + 360) % 360
+  if (normalized === 360) return 0
+  if (normalized === 0 || normalized === 90 || normalized === 180 || normalized === 270) {
+    return normalized
+  }
+  return 0
+}
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
@@ -113,9 +141,14 @@ export default function DrawingEditorClient() {
   })
   const [exportTarget, setExportTarget] = useState<'all' | 'unassigned' | 'contractor'>('all')
   const [exportContractorId, setExportContractorId] = useState<string>('all')
-  const [exportContentType, setExportContentType] = useState<'list' | 'drawing_and_list'>('list')
+  const [exportContentType, setExportContentType] = useState<'list' | 'drawing_and_list'>('drawing_and_list')
+  const [isExporting, setIsExporting] = useState(false)
+  const [project, setProject] = useState<Project | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const drawingExportRef = useRef<HTMLDivElement | null>(null)
+  const zoomSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
@@ -134,15 +167,17 @@ export default function DrawingEditorClient() {
 
   const loadData = async () => {
     try {
-      const [drawingListRes, contractorRes, issueRes] = await Promise.all([
+      const [drawingListRes, contractorRes, issueRes, projectRes] = await Promise.all([
         authedFetch(`/api/projects/${projectId}/drawings`),
         authedFetch(`/api/projects/${projectId}/contractors`),
         authedFetch(`/api/drawings/${drawingId}/issues`),
+        authedFetch(`/api/projects/${projectId}`),
       ])
 
       const drawingListData = (await drawingListRes.json()) as { drawings?: DrawingRow[]; error?: string }
       const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
       const issueData = (await issueRes.json()) as { drawing?: DrawingRow; issues?: Issue[]; error?: string }
+      const projectData = (await projectRes.json()) as { project?: Project; error?: string }
 
       if (!drawingListRes.ok) {
         console.error('load project drawings error:', drawingListData.error ?? '図面取得失敗')
@@ -150,6 +185,9 @@ export default function DrawingEditorClient() {
       }
       if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
       if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
+      if (projectRes.ok && projectData.project) {
+        setProject(projectData.project)
+      }
 
       const resolvedContractors = (contractorData.contractors ?? []).length > 0
         ? (contractorData.contractors ?? [])
@@ -185,11 +223,77 @@ export default function DrawingEditorClient() {
     if (user) void loadData()
   }, [user, drawingId, projectId])
 
+  const saveViewSettings = useCallback(
+    async (settings: { rotation?: number; zoom?: number }) => {
+      const payload = {
+        ...(settings.rotation !== undefined ? { rotation: settings.rotation } : {}),
+        ...(settings.zoom !== undefined ? { zoom: settings.zoom } : {}),
+      }
+      if (Object.keys(payload).length === 0) return
+
+      console.log('save drawing view settings:', {
+        drawingId,
+        rotation: settings.rotation,
+        zoom: settings.zoom,
+      })
+
+      try {
+        const response = await authedFetch(`/api/drawings/${drawingId}/view-settings`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const data = (await response.json()) as { error?: string }
+        if (!response.ok) {
+          throw new Error(data.error ?? '表示設定の保存に失敗しました')
+        }
+
+        setDrawings((prev) =>
+          prev.map((item) => (item.id === drawingId ? { ...item, ...payload } : item)),
+        )
+        setCurrentDrawing((prev) => (prev && prev.id === drawingId ? { ...prev, ...payload } : prev))
+      } catch (error) {
+        console.error('save drawing view settings error:', error)
+      }
+    },
+    [drawingId],
+  )
+
+  const scheduleZoomSave = useCallback(
+    (nextZoom: number) => {
+      if (zoomSaveTimerRef.current) clearTimeout(zoomSaveTimerRef.current)
+      zoomSaveTimerRef.current = setTimeout(() => {
+        void saveViewSettings({ zoom: nextZoom })
+      }, ZOOM_SAVE_DEBOUNCE_MS)
+    },
+    [saveViewSettings],
+  )
+
   useEffect(() => {
-    setZoom(1)
+    return () => {
+      if (zoomSaveTimerRef.current) clearTimeout(zoomSaveTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (zoomSaveTimerRef.current) {
+      clearTimeout(zoomSaveTimerRef.current)
+      zoomSaveTimerRef.current = null
+    }
+    if (!currentDrawing || currentDrawing.id !== drawingId) return
+
+    const initialRotation = normalizeRotation(currentDrawing.rotation ?? 0)
+    const initialZoom = clampZoom(currentDrawing.zoom ?? 1)
+
+    console.log('initial drawing view settings:', {
+      rotation: currentDrawing?.rotation,
+      zoom: currentDrawing?.zoom,
+    })
+
+    setRotation(initialRotation)
+    setZoom(initialZoom)
     setPan({ x: 0, y: 0 })
-    setRotation(0)
-  }, [drawingId, setZoom, setPan])
+  }, [currentDrawing, drawingId, setZoom, setPan])
 
   useEffect(() => {
     if (!currentDrawing) return
@@ -197,10 +301,6 @@ export default function DrawingEditorClient() {
     if (pageIndex < totalPages) return
     setPageIndex(Math.max(totalPages - 1, 0))
   }, [currentDrawing, pageIndex, pdfPageCount])
-
-  useEffect(() => {
-    console.log("rotation:", rotation)
-  }, [rotation])
 
   useEffect(() => {
     console.log('issues:', issues)
@@ -257,6 +357,98 @@ export default function DrawingEditorClient() {
   }, [drawings, sortedDrawings, currentDrawingIndex, drawingId, nextDrawing, prevDrawing])
 
   const floors = useMemo(() => sortedDrawings.map((drawing) => drawing.floor_label), [sortedDrawings])
+
+  const exportCondition = useMemo<PdfExportCondition>(
+    () => ({
+      exportTarget,
+      exportContractorId,
+      exportContentType,
+    }),
+    [exportTarget, exportContractorId, exportContentType],
+  )
+
+  const exportFilteredIssues = useMemo(
+    () => filterIssuesForExport(numberedIssues, exportCondition),
+    [numberedIssues, exportCondition],
+  )
+
+  const exportPageIssues = useMemo(
+    () => exportFilteredIssues.filter((issue) => issue.page_index === pageIndex),
+    [exportFilteredIssues, pageIndex],
+  )
+
+  const pinsToRender = isExporting ? exportPageIssues : pageIssues
+
+  const getExportContractorLabel = useCallback(() => {
+    if (exportTarget === 'all') return 'All Contractors'
+    if (exportTarget === 'unassigned') return 'Unassigned'
+    const contractor = contractors.find((item) => item.id === exportContractorId)
+    return contractor?.name ?? 'Contractor'
+  }, [contractors, exportContractorId, exportTarget])
+
+  const handlePdfExport = useCallback(async () => {
+    try {
+      setIsExporting(true)
+      setExportError(null)
+
+      console.log('pdf export condition:', exportCondition)
+
+      if (exportTarget === 'contractor' && exportContractorId === 'all') {
+        throw new Error('出力する業者を選択してください')
+      }
+
+      const filteredIssues = exportFilteredIssues
+      console.log('pdf export issues:', filteredIssues)
+
+      const target = drawingExportRef.current
+      console.log('pdf export target:', target)
+
+      if (exportContentType === 'drawing_and_list' && !target) {
+        throw new Error('PDF出力対象が見つかりません')
+      }
+
+      console.log('pdf export start')
+
+      let drawingImageData: string | null = null
+      if (exportContentType === 'drawing_and_list' && target) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        })
+        drawingImageData = await captureDrawingElement(target)
+      }
+
+      const { blob, filename } = await buildInspectionReportPdf({
+        meta: {
+          projectName: project?.name ?? 'Project',
+          address: project?.address ?? '-',
+          contractorLabel: getExportContractorLabel(),
+          exportDate: new Date().toISOString().slice(0, 10),
+        },
+        issues: filteredIssues,
+        condition: exportCondition,
+        drawingImageData,
+      })
+
+      downloadPdfBlob(blob, filename)
+      console.log('pdf export done')
+      toast.success('PDFを出力しました')
+    } catch (error) {
+      console.error('pdf export error:', error)
+      setExportError('PDF出力に失敗しました')
+      toast.error('PDF出力に失敗しました')
+    } finally {
+      setIsExporting(false)
+    }
+  }, [
+    exportCondition,
+    exportContentType,
+    exportContractorId,
+    exportFilteredIssues,
+    exportTarget,
+    getExportContractorLabel,
+    project?.address,
+    project?.name,
+  ])
 
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
   const isFallbackContractor = useCallback((contractorId: string) => contractorId.startsWith('fallback-'), [])
@@ -640,8 +832,16 @@ export default function DrawingEditorClient() {
           toast.error('この階の図面は登録されていません')
         }}
         onChangeMode={setMode}
-        onZoomIn={() => setZoom(Math.min(2.5, zoom + 0.1))}
-        onZoomOut={() => setZoom(Math.max(0.5, zoom - 0.1))}
+        onZoomIn={() => {
+          const nextZoom = Math.min(MAX_ZOOM, zoom + 0.1)
+          setZoom(nextZoom)
+          scheduleZoomSave(nextZoom)
+        }}
+        onZoomOut={() => {
+          const nextZoom = Math.max(MIN_ZOOM, zoom - 0.1)
+          setZoom(nextZoom)
+          scheduleZoomSave(nextZoom)
+        }}
         onPrevDrawing={() => {
           if (prevDrawing) {
             router.push(`/projects/${projectId}/drawings/${prevDrawing.id}`)
@@ -652,7 +852,11 @@ export default function DrawingEditorClient() {
             router.push(`/projects/${projectId}/drawings/${nextDrawing.id}`)
           }
         }}
-        onRotate={() => setRotation((prev) => (prev + 90) % 360)}
+        onRotate={() => {
+          const nextRotation = (rotation + 90) % 360
+          setRotation(nextRotation)
+          void saveViewSettings({ rotation: nextRotation })
+        }}
       />
       <div className="flex min-h-0 flex-1">
         {sidebarOpen ? (
@@ -745,17 +949,15 @@ export default function DrawingEditorClient() {
                           </TabsList>
                         </Tabs>
                       </div>
+                      {exportError ? (
+                        <p className="text-xs text-red-600">{exportError}</p>
+                      ) : null}
                       <Button
                         className="w-full bg-blue-600 hover:bg-blue-700"
-                        onClick={() =>
-                          console.log('pdf export condition:', {
-                            exportTarget,
-                            exportContractorId,
-                            exportContentType,
-                          })
-                        }
+                        disabled={isExporting}
+                        onClick={() => void handlePdfExport()}
                       >
-                        PDF出力
+                        {isExporting ? 'PDF作成中...' : 'PDF出力'}
                       </Button>
                     </CardContent>
                   </Card>
@@ -793,7 +995,11 @@ export default function DrawingEditorClient() {
                   className="relative overflow-hidden bg-white p-2 shadow"
                   style={{ transform: `scale(${effectiveScale})`, transformOrigin: 'center center' }}
                 >
-                  <div className="relative" style={{ width: stageWidth, height: stageHeight }}>
+                  <div
+                    ref={drawingExportRef}
+                    className="relative"
+                    style={{ width: stageWidth, height: stageHeight }}
+                  >
                     <Document
                       file={pdfUrl}
                       onLoadSuccess={({ numPages }) => {
@@ -822,8 +1028,8 @@ export default function DrawingEditorClient() {
                       onClick={handleStageClick}
                     >
                       <Layer>
-                        {pageIssues.map((issue) => {
-                          if (!visibleContractorIds.has(getIssueContractorId(issue))) return null
+                        {pinsToRender.map((issue) => {
+                          if (!isExporting && !visibleContractorIds.has(getIssueContractorId(issue))) return null
                           return (
                             <IssuePin
                               key={issue.id}
