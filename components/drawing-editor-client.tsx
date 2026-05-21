@@ -714,28 +714,25 @@ export default function DrawingEditorClient() {
     }
   }
 
-  const jumpToIssue = (issue: Issue) => {
-    setSelectedIssueId(issue.id)
-    console.log('issue selected:', issue.id)
-  }
-
-  const startEditIssue = (issue: Issue) => {
+  const startEditIssue = useCallback((issue: Issue) => {
     setEditingIssue(issue)
     setIssueModalOpen(true)
-  }
+  }, [])
 
-  const requestDeleteIssue = (issue: Issue) => {
+  const requestDeleteIssue = useCallback((issue: Issue) => {
     setSelectedIssueId(issue.id)
     setDeleteConfirmOpen(true)
-  }
+  }, [])
 
   const updatePinPosition = useCallback(
     async (issueId: string, pinX: number, pinY: number) => {
-      console.log('move issue pin:', {
-        issueId,
-        pin_x: pinX,
-        pin_y: pinY,
-      })
+      console.log('pin drag end:', { issueId, pin_x: pinX, pin_y: pinY })
+      const previousIssues = useEditorStore.getState().issues
+      setIssues(
+        previousIssues.map((issue) =>
+          issue.id === issueId ? { ...issue, pin_x: pinX, pin_y: pinY } : issue,
+        ),
+      )
       try {
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
           method: 'PATCH',
@@ -745,23 +742,25 @@ export default function DrawingEditorClient() {
         const data = (await response.json()) as { error?: string }
         if (!response.ok) {
           console.error('update issue position error:', data.error ?? data)
-          return
+          setIssues(previousIssues)
         }
-        await refetchIssues()
       } catch (error) {
         console.error('update issue position error:', error)
+        setIssues(previousIssues)
       }
     },
-    [drawingId, refetchIssues],
+    [drawingId, setIssues],
   )
 
   const updateCalloutPosition = useCallback(
     async (issueId: string, calloutX: number, calloutY: number) => {
-      console.log('move issue callout:', {
-        issueId,
-        callout_x: calloutX,
-        callout_y: calloutY,
-      })
+      console.log('callout drag end:', { issueId, callout_x: calloutX, callout_y: calloutY })
+      const previousIssues = useEditorStore.getState().issues
+      setIssues(
+        previousIssues.map((issue) =>
+          issue.id === issueId ? { ...issue, callout_x: calloutX, callout_y: calloutY } : issue,
+        ),
+      )
       try {
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
           method: 'PATCH',
@@ -771,14 +770,26 @@ export default function DrawingEditorClient() {
         const data = (await response.json()) as { error?: string }
         if (!response.ok) {
           console.error('update issue position error:', data.error ?? data)
-          return
+          setIssues(previousIssues)
         }
-        await refetchIssues()
       } catch (error) {
         console.error('update issue position error:', error)
+        setIssues(previousIssues)
       }
     },
-    [drawingId, refetchIssues],
+    [drawingId, setIssues],
+  )
+
+  const jumpToIssue = useCallback((issue: Issue) => {
+    setSelectedIssueId(issue.id)
+    console.log('issue selected:', issue.id)
+  }, [])
+
+  const handleIssueSelect = useCallback(
+    (selectedIssue: Issue & { no: number }) => {
+      jumpToIssue(selectedIssue)
+    },
+    [jumpToIssue],
   )
 
   const pdfUrl = currentDrawing?.signed_url ?? null
@@ -1097,6 +1108,7 @@ export default function DrawingEditorClient() {
                       width={stageWidth}
                       height={stageHeight}
                       className="absolute inset-0"
+                      style={mode === 'edit' ? { cursor: 'grab' } : undefined}
                       onClick={handleStageClick}
                     >
                       <Layer>
@@ -1110,9 +1122,7 @@ export default function DrawingEditorClient() {
                               stageHeight={stageHeight}
                               isSelected={selectedIssueId === issue.id}
                               canDrag={mode === 'edit'}
-                              onSelect={(selectedIssue) => {
-                                jumpToIssue(selectedIssue)
-                              }}
+                              onSelect={handleIssueSelect}
                               onEdit={startEditIssue}
                               onDeleteRequest={requestDeleteIssue}
                               onDragPin={updatePinPosition}
