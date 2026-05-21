@@ -19,6 +19,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { authedFetch } from '@/lib/authed-fetch'
+import { createTempIssueFolderId } from '@/lib/issue-photo-paths'
+import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import { ISSUE_TYPES, type Contractor, type Drawing, type Issue, type IssueFormValues } from '@/lib/domain'
@@ -236,49 +238,64 @@ export default function DrawingEditorClient() {
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
   const isFallbackContractor = useCallback((contractorId: string) => contractorId.startsWith('fallback-'), [])
 
-  const buildIssueFormData = useCallback((payload: Record<string, unknown>, values: IssueFormValues) => {
-    console.log('before photo file:', values.beforePhotoFile)
-    console.log('after photo file:', values.afterPhotoFile)
-
-    const hasPhotos =
-      values.beforePhotoFile ||
-      values.afterPhotoFile ||
-      values.clearBeforePhoto ||
-      values.clearAfterPhoto
-
-    if (!hasPhotos) {
-      return null
+  const parseApiResponse = useCallback(async <T,>(response: Response): Promise<T & { error?: string }> => {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      return (await response.json()) as T & { error?: string }
     }
-
-    const formData = new FormData()
-    formData.append('payload', JSON.stringify(payload))
-    if (values.beforePhotoFile) {
-      formData.append('before_photo', values.beforePhotoFile)
-    }
-    if (values.afterPhotoFile) {
-      formData.append('after_photo', values.afterPhotoFile)
-    }
-    if (values.clearBeforePhoto) {
-      formData.append('clear_before_photo', 'true')
-    }
-    if (values.clearAfterPhoto) {
-      formData.append('clear_after_photo', 'true')
-    }
-    return formData
+    return { error: await response.text() } as T & { error?: string }
   }, [])
 
   const createIssue = useCallback(
     async (values: IssueFormValues, continueMode: boolean) => {
       if (!addingPin || !currentDrawing) return
       try {
+        const beforePhotoFile = values.beforePhotoFile
+        const afterPhotoFile = values.afterPhotoFile
+        console.log('before photo file:', beforePhotoFile)
+        console.log('after photo file:', afterPhotoFile)
+
+        let beforePhotoPath: string | null = null
+        let afterPhotoPath: string | null = null
+        const tempFolderId = createTempIssueFolderId()
+
+        try {
+          if (beforePhotoFile) {
+            beforePhotoPath = await uploadIssuePhotoFromClient(
+              currentDrawing.tenant_id,
+              projectId,
+              drawingId,
+              tempFolderId,
+              'before',
+              beforePhotoFile,
+            )
+            console.log('before photo path:', beforePhotoPath)
+          }
+          if (afterPhotoFile) {
+            afterPhotoPath = await uploadIssuePhotoFromClient(
+              currentDrawing.tenant_id,
+              projectId,
+              drawingId,
+              tempFolderId,
+              'after',
+              afterPhotoFile,
+            )
+            console.log('after photo path:', afterPhotoPath)
+          }
+        } catch (error) {
+          console.error('photo upload error:', error)
+          toast.error('写真のアップロードに失敗しました')
+          return
+        }
+
         const payload = {
-          tenant_id: user?.id ?? null,
+          tenant_id: currentDrawing.tenant_id,
           project_id: projectId,
           drawing_id: drawingId,
           page_index: pageIndex ?? 0,
           floor_label: currentDrawing.floor_label ?? '1F',
           issue_type: values.issue_type,
-          issue_text: values.issue_text.trim() || '',
+          issue_text: values.issue_text.trim() || null,
           issue_category: values.issue_category || values.issue_type || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
@@ -289,21 +306,18 @@ export default function DrawingEditorClient() {
           callout_x: Math.min(1, Math.max(0, addingPin.x + 0.05)),
           callout_y: Math.min(1, Math.max(0, addingPin.y - 0.05)),
           status: values.status || '未対応',
+          before_photo_path: beforePhotoPath,
+          after_photo_path: afterPhotoPath,
         }
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
         console.log('auto floor_label:', currentDrawing?.floor_label)
 
-        const formData = buildIssueFormData(payload, values)
         const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
           method: 'POST',
-          ...(formData
-            ? { body: formData }
-            : {
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-              }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         })
-        const data = (await response.json()) as IssueResponse
+        const data = await parseApiResponse<IssueResponse>(response)
         if (!response.ok || !data.issue) {
           const errorMessage =
             data.error === '写真のアップロードに失敗しました'
@@ -328,16 +342,60 @@ export default function DrawingEditorClient() {
         toast.error('保存失敗')
       }
     },
-    [addingPin, buildIssueFormData, currentDrawing, drawingId, isFallbackContractor, pageIndex, projectId, refetchIssues, setMode, user?.id],
+    [addingPin, currentDrawing, drawingId, isFallbackContractor, pageIndex, parseApiResponse, projectId, refetchIssues, setMode],
   )
 
   const updateIssue = useCallback(
     async (targetIssue: Issue, values: IssueFormValues) => {
       try {
-        const payload = {
+        const beforePhotoFile = values.beforePhotoFile
+        const afterPhotoFile = values.afterPhotoFile
+        console.log('before photo file:', beforePhotoFile)
+        console.log('after photo file:', afterPhotoFile)
+
+        let beforePhotoPath = targetIssue.before_photo_path ?? null
+        let afterPhotoPath = targetIssue.after_photo_path ?? null
+
+        if (values.clearBeforePhoto) {
+          beforePhotoPath = null
+        }
+        if (values.clearAfterPhoto) {
+          afterPhotoPath = null
+        }
+
+        try {
+          if (beforePhotoFile) {
+            beforePhotoPath = await uploadIssuePhotoFromClient(
+              targetIssue.tenant_id,
+              targetIssue.project_id,
+              targetIssue.drawing_id,
+              targetIssue.id,
+              'before',
+              beforePhotoFile,
+            )
+            console.log('before photo path:', beforePhotoPath)
+          }
+          if (afterPhotoFile) {
+            afterPhotoPath = await uploadIssuePhotoFromClient(
+              targetIssue.tenant_id,
+              targetIssue.project_id,
+              targetIssue.drawing_id,
+              targetIssue.id,
+              'after',
+              afterPhotoFile,
+            )
+            console.log('after photo path:', afterPhotoPath)
+          }
+        } catch (error) {
+          console.error('photo upload error:', error)
+          toast.error('写真のアップロードに失敗しました')
+          return
+        }
+
+        const payload: Record<string, unknown> = {
           floor_label: currentDrawing?.floor_label ?? '1F',
           issue_type: values.issue_type,
-          issue_text: values.issue_text.trim() || '',
+          issue_text: values.issue_text.trim() || null,
           issue_category: values.issue_category || values.issue_type || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
@@ -345,18 +403,22 @@ export default function DrawingEditorClient() {
               : null,
           status: values.status || '未対応',
         }
+
+        if (beforePhotoFile || values.clearBeforePhoto) {
+          payload.before_photo_path = beforePhotoPath
+        }
+        if (afterPhotoFile || values.clearAfterPhoto) {
+          payload.after_photo_path = afterPhotoPath
+        }
+
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
-        const formData = buildIssueFormData(payload, values)
+
         const response = await authedFetch(`/api/issues/${targetIssue.id}`, {
           method: 'PATCH',
-          ...(formData
-            ? { body: formData }
-            : {
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-              }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         })
-      const data = (await response.json()) as { issue?: Issue; error?: string; missing?: string[] }
+        const data = await parseApiResponse<{ issue?: Issue; error?: string; missing?: string[] }>(response)
         if (!response.ok || !data.issue) {
           const errorMessage =
             data.error === '写真のアップロードに失敗しました'
@@ -364,7 +426,7 @@ export default function DrawingEditorClient() {
               : Array.isArray(data.missing) && data.missing.length > 0
                 ? `${data.error ?? '更新に失敗しました'}: ${data.missing.join(', ')}`
                 : data.error ?? '更新に失敗しました'
-          console.error('create issue error:', data.error ?? data)
+          console.error('create issue error:', data)
           toast.error(errorMessage)
           return
         }
@@ -378,7 +440,7 @@ export default function DrawingEditorClient() {
         toast.error('更新に失敗しました')
       }
     },
-    [buildIssueFormData, currentDrawing?.floor_label, isFallbackContractor, refetchIssues],
+    [currentDrawing?.floor_label, isFallbackContractor, parseApiResponse, refetchIssues],
   )
 
   const deleteIssue = async () => {

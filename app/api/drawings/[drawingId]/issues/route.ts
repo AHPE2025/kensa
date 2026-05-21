@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
-import {
-  attachIssuePhotoSignedUrls,
-  createTempIssueFolderId,
-  uploadIssuePhotoFile,
-} from '@/lib/issue-photos'
+import { attachIssuePhotoSignedUrls } from '@/lib/issue-photos'
 import { DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
@@ -104,25 +100,15 @@ export async function POST(request: NextRequest, { params }: Params) {
   const { drawingId } = await params
 
   const contentType = request.headers.get('content-type') ?? ''
-  let body: Record<string, unknown> = {}
-  let beforePhotoFile: File | null = null
-  let afterPhotoFile: File | null = null
-
-  if (contentType.includes('multipart/form-data')) {
-    const formData = await request.formData()
-    const payloadRaw = formData.get('payload')
-    body = payloadRaw ? (JSON.parse(String(payloadRaw)) as Record<string, unknown>) : {}
-    const beforePhoto = formData.get('before_photo')
-    const afterPhoto = formData.get('after_photo')
-    beforePhotoFile = beforePhoto instanceof File && beforePhoto.size > 0 ? beforePhoto : null
-    afterPhotoFile = afterPhoto instanceof File && afterPhoto.size > 0 ? afterPhoto : null
-  } else {
-    body = (await request.json()) as Record<string, unknown>
+  if (!contentType.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 })
   }
 
+  const body = (await request.json()) as Record<string, unknown>
+
   console.log('issue request body:', body)
-  console.log('before photo file:', beforePhotoFile)
-  console.log('after photo file:', afterPhotoFile)
+  console.log('before photo path:', body.before_photo_path ?? null)
+  console.log('after photo path:', body.after_photo_path ?? null)
 
   const { data: drawing, error: drawingError } = await client
     .from('drawings')
@@ -194,41 +180,10 @@ export async function POST(request: NextRequest, { params }: Params) {
     resolveOptionalString(body.issue_type) ??
     null
 
-  const tempFolderId = createTempIssueFolderId()
-  let beforePhotoPath: string | null = null
-  let afterPhotoPath: string | null = null
+  const beforePhotoPath = resolveOptionalString(body.before_photo_path)
+  const afterPhotoPath = resolveOptionalString(body.after_photo_path)
 
-  try {
-    if (beforePhotoFile) {
-      beforePhotoPath = await uploadIssuePhotoFile(
-        client,
-        tenantId,
-        drawing.project_id,
-        drawingId,
-        tempFolderId,
-        'before',
-        beforePhotoFile,
-      )
-      console.log('before photo path:', beforePhotoPath)
-    }
-    if (afterPhotoFile) {
-      afterPhotoPath = await uploadIssuePhotoFile(
-        client,
-        tenantId,
-        drawing.project_id,
-        drawingId,
-        tempFolderId,
-        'after',
-        afterPhotoFile,
-      )
-      console.log('after photo path:', afterPhotoPath)
-    }
-  } catch (error) {
-    console.error('photo upload error:', error)
-    return NextResponse.json({ error: '写真のアップロードに失敗しました' }, { status: 400 })
-  }
-
-  const insertBase = {
+  const payload: Record<string, unknown> = {
     tenant_id: tenantId,
     project_id: drawing.project_id,
     drawing_id: drawingId,
@@ -244,40 +199,28 @@ export async function POST(request: NextRequest, { params }: Params) {
     status: typeof body.status === 'string' ? body.status : '未対応',
     before_photo_path: beforePhotoPath,
     after_photo_path: afterPhotoPath,
-    created_by: user.id,
+    issue_category: resolvedIssueCategory,
+    created_by: user?.id ?? null,
   }
 
-  let data: Record<string, unknown> | null = null
-  let error: { message: string } | null = null
+  console.log('issue insert payload:', JSON.stringify(payload, null, 2))
 
-  const firstTry = await client
+  const { data, error } = await client
     .from('issues')
-    .insert({
-      ...insertBase,
-      issue_category: resolvedIssueCategory,
-    })
+    .insert(payload)
     .select('*, contractor:contractors(id,name)')
     .single()
-  data = firstTry.data as Record<string, unknown> | null
-  error = firstTry.error
-
-  if (error && /issue_category|before_photo_path|after_photo_path/i.test(error.message)) {
-    const fallbackPayload = { ...insertBase, issue_category: resolvedIssueCategory }
-    delete (fallbackPayload as Record<string, unknown>).before_photo_path
-    delete (fallbackPayload as Record<string, unknown>).after_photo_path
-
-    const fallbackTry = await client
-      .from('issues')
-      .insert(fallbackPayload)
-      .select('*, contractor:contractors(id,name)')
-      .single()
-    data = fallbackTry.data as Record<string, unknown> | null
-    error = fallbackTry.error
-  }
 
   if (error) {
     console.error('create issue error:', error)
-    return NextResponse.json({ error: error.message, details: error }, { status: 400 })
+    return NextResponse.json(
+      {
+        error: '指摘保存に失敗しました',
+        details: error.message,
+        received: payload,
+      },
+      { status: 400 },
+    )
   }
 
   const issueWithUrls = data ? await attachIssuePhotoSignedUrls(client, data) : null

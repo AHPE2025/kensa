@@ -95,7 +95,9 @@ export type Issue = {
   after_photo_path?: string | null
   before_photo_url?: string | null
   after_photo_url?: string | null
-  created_by: string
+  created_by: string | null
   created_at: string
+  updated_by?: string | null
+  updated_at?: string | null
   contractor?: { id: string; name: string } | null
 }
