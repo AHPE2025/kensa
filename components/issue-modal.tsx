@@ -23,7 +23,6 @@ import { ISSUE_TYPES, type Contractor } from '@/lib/domain'
 import { Search } from 'lucide-react'
 
 type IssueFormValues = {
-  floor_label: string
   issue_type: string
   issue_text: string
   contractor_id: string
@@ -35,7 +34,6 @@ type IssueModalProps = {
   open: boolean
   title: string
   contractors: Contractor[]
-  floors: string[]
   defaultValues: IssueFormValues
   onClose: () => void
   onSave: (values: IssueFormValues) => void
@@ -47,7 +45,6 @@ export function IssueModal({
   open,
   title,
   contractors,
-  floors,
   defaultValues,
   onClose,
   onSave,
@@ -88,26 +85,7 @@ export function IssueModal({
           <DialogTitle className="text-lg">{title}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-5 py-2">
-          <div className="flex flex-col gap-2">
-            <Label className="font-medium">階</Label>
-            <Select
-              value={form.floor_label}
-              onValueChange={(value) => setForm((prev) => ({ ...prev, floor_label: value }))}
-            >
-              <SelectTrigger className="h-11">
-                <SelectValue placeholder="階を選択" />
-              </SelectTrigger>
-              <SelectContent>
-                {floors.map((f) => (
-                  <SelectItem key={f} value={f}>
-                    {f}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
+        <div className="flex flex-col gap-4 py-1">
           <div className="flex flex-col gap-2">
             <Label className="font-medium">指摘区分</Label>
             <Select
@@ -224,7 +202,7 @@ export function IssueModal({
               type="button"
               variant="secondary"
               onClick={handleSaveAndNext}
-              disabled={!form.issue_text.trim() || !form.floor_label}
+              disabled={!form.issue_text.trim()}
               className="h-11"
             >
               保存して次を追加
@@ -233,7 +211,7 @@ export function IssueModal({
           <Button
             type="button"
             onClick={handleSave}
-            disabled={!form.issue_text.trim() || !form.floor_label}
+            disabled={!form.issue_text.trim()}
             className="h-11 bg-blue-600 hover:bg-blue-700"
           >
             {submitLabel}

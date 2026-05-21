@@ -37,7 +37,6 @@ type DrawingRow = Drawing & {
 }
 
 type IssueFormValues = {
-  floor_label: string
   issue_type: string
   issue_text: string
   contractor_id: string
@@ -254,7 +253,7 @@ export default function DrawingEditorClient() {
           project_id: projectId,
           drawing_id: drawingId,
           page_index: pageIndex ?? 0,
-          floor_label: values.floor_label || currentDrawing.floor_label,
+          floor_label: currentDrawing.floor_label ?? '1F',
           issue_type: values.issue_type,
           issue_text: values.issue_text.trim(),
           issue_category: values.issue_category || null,
@@ -269,6 +268,7 @@ export default function DrawingEditorClient() {
           status: values.status || '未対応',
         }
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
+        console.log('auto floor_label:', currentDrawing?.floor_label)
 
         const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
           method: 'POST',
@@ -304,7 +304,7 @@ export default function DrawingEditorClient() {
     async (targetIssue: Issue, values: IssueFormValues) => {
       try {
         const payload = {
-          floor_label: values.floor_label || currentDrawing?.floor_label,
+          floor_label: currentDrawing?.floor_label ?? '1F',
           issue_type: values.issue_type,
           issue_text: values.issue_text.trim(),
           issue_category: values.issue_category || null,
@@ -707,9 +707,7 @@ export default function DrawingEditorClient() {
         open={issueModalOpen}
         title={editingIssue ? '指摘を編集' : '指摘を追加'}
         contractors={contractors}
-        floors={floors.length > 0 ? floors : [currentDrawing?.floor_label ?? '1F']}
         defaultValues={{
-          floor_label: editingIssue?.floor_label ?? currentDrawing?.floor_label ?? '',
           issue_type: editingIssue?.issue_type ?? ISSUE_TYPES[0],
           issue_text: editingIssue?.issue_text ?? '',
           contractor_id: editingIssue?.contractor_id ?? '',

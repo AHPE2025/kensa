@@ -9,11 +9,24 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { authedFetch } from '@/lib/authed-fetch'
 import { useAuthStore } from '@/lib/stores/auth-store'
-import type { Contractor, Drawing, Project } from '@/lib/domain'
+import {
+  DEFAULT_DRAWING_FLOOR_LABEL,
+  DRAWING_FLOOR_LABEL_OPTIONS,
+  type Contractor,
+  type Drawing,
+  type Project,
+} from '@/lib/domain'
 import { toast } from 'sonner'
 import { PdfExportPanel } from '@/components/pdf-export-panel'
 
@@ -29,7 +42,7 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null)
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
   const [contractors, setContractors] = useState<Contractor[]>([])
-  const [floorLabel, setFloorLabel] = useState('')
+  const [floorLabel, setFloorLabel] = useState<string>(DEFAULT_DRAWING_FLOOR_LABEL)
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [contractorDialog, setContractorDialog] = useState(false)
@@ -132,7 +145,7 @@ export default function ProjectDetailPage() {
         return
       }
       toast.success('図面をアップロードしました')
-      setFloorLabel('')
+      setFloorLabel(DEFAULT_DRAWING_FLOOR_LABEL)
       setFile(null)
       await loadAll()
     } catch (error) {
@@ -229,7 +242,18 @@ export default function ProjectDetailPage() {
               <form className="grid gap-3 md:grid-cols-4" onSubmit={onUpload}>
                 <div className="space-y-1">
                   <Label>階表示</Label>
-                  <Input value={floorLabel} onChange={(event) => setFloorLabel(event.target.value)} required />
+                  <Select value={floorLabel} onValueChange={setFloorLabel}>
+                    <SelectTrigger className="h-11">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DRAWING_FLOOR_LABEL_OPTIONS.map((floor) => (
+                        <SelectItem key={floor} value={floor}>
+                          {floor}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1 md:col-span-2">
                   <Label>PDF</Label>

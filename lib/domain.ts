@@ -1,5 +1,16 @@
 export const ISSUE_TYPES = ['傷', '汚れ', '補修', '隙間', '浮き', '凹み', '調整', 'その他'] as const
 
+export const DRAWING_FLOOR_LABEL_OPTIONS = [
+  'B3F',
+  'B2F',
+  'B1F',
+  ...Array.from({ length: 30 }, (_, index) => `${index + 1}F`),
+  'RF',
+  'PH',
+] as const
+
+export const DEFAULT_DRAWING_FLOOR_LABEL = '1F' as const
+
 export type IssueType = (typeof ISSUE_TYPES)[number]
 
 export type Profile = {
