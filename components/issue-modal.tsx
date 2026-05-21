@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -179,6 +180,9 @@ export function IssueModal({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="text-lg">{title}</DialogTitle>
+          <DialogDescription className="sr-only">
+            指摘内容、担当業者、状態、写真を入力して保存する画面です。
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-1">
