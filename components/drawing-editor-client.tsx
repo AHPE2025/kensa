@@ -26,11 +26,12 @@ import { useAuthStore } from '@/lib/stores/auth-store'
 import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type Project } from '@/lib/domain'
 import {
   buildInspectionReportPdf,
-  captureDrawingElement,
+  captureElement,
   downloadPdfBlob,
-  filterIssuesForExport,
+  splitIssuesForPdfExport,
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
+import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel } from '@/components/issue-list-panel'
@@ -148,6 +149,8 @@ export default function DrawingEditorClient() {
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const drawingExportRef = useRef<HTMLDivElement | null>(null)
+  const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
+  const commonTableExportRef = useRef<HTMLDivElement | null>(null)
   const zoomSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -367,71 +370,100 @@ export default function DrawingEditorClient() {
     [exportTarget, exportContractorId, exportContentType],
   )
 
-  const exportFilteredIssues = useMemo(
-    () => filterIssuesForExport(numberedIssues, exportCondition),
-    [numberedIssues, exportCondition],
+  const pdfExportSplit = useMemo(
+    () => splitIssuesForPdfExport(numberedIssues, exportCondition, contractors),
+    [numberedIssues, exportCondition, contractors],
   )
 
-  const exportPageIssues = useMemo(
-    () => exportFilteredIssues.filter((issue) => issue.page_index === pageIndex),
-    [exportFilteredIssues, pageIndex],
+  const exportDrawingPageIssues = useMemo(
+    () => pdfExportSplit.drawingIssues.filter((issue) => issue.page_index === pageIndex),
+    [pdfExportSplit.drawingIssues, pageIndex],
   )
 
-  const pinsToRender = isExporting ? exportPageIssues : pageIssues
+  const pinsToRender = isExporting ? exportDrawingPageIssues : pageIssues
 
-  const getExportContractorLabel = useCallback(() => {
-    if (exportTarget === 'all') return 'All Contractors'
-    if (exportTarget === 'unassigned') return 'Unassigned'
-    const contractor = contractors.find((item) => item.id === exportContractorId)
-    return contractor?.name ?? 'Contractor'
-  }, [contractors, exportContractorId, exportTarget])
+  const exportDateLabel = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const inspectionDateLabel = useMemo(
+    () => project?.inspection_date?.slice(0, 10) ?? exportDateLabel,
+    [exportDateLabel, project?.inspection_date],
+  )
+
+  const selectedTableBadgeVariant = useMemo(() => {
+    if (exportTarget === 'unassigned') return 'unassigned' as const
+    if (exportTarget === 'all') return 'all' as const
+    return 'contractor' as const
+  }, [exportTarget])
 
   const handlePdfExport = useCallback(async () => {
     try {
       setIsExporting(true)
       setExportError(null)
 
-      console.log('pdf export condition:', exportCondition)
-
       if (exportTarget === 'contractor' && exportContractorId === 'all') {
         throw new Error('出力する業者を選択してください')
       }
 
-      const filteredIssues = exportFilteredIssues
-      console.log('pdf export issues:', filteredIssues)
+      const {
+        selectedIssues,
+        commonIssues,
+        drawingIssues,
+        separateCommonPage,
+        selectedContractor,
+        exportContractorLabel,
+      } = pdfExportSplit
 
-      const target = drawingExportRef.current
-      console.log('pdf export target:', target)
+      console.log('pdf export condition:', exportCondition)
+      console.log('selected contractor:', selectedContractor)
+      console.log('selected issues:', selectedIssues)
+      console.log('common issues:', commonIssues)
+      console.log('pdf drawing issues:', drawingIssues)
 
-      if (exportContentType === 'drawing_and_list' && !target) {
+      const selectedTableTarget = selectedTableExportRef.current
+      if (!selectedTableTarget) {
+        throw new Error('指摘一覧表の出力対象が見つかりません')
+      }
+
+      const drawingTarget = drawingExportRef.current
+      if (exportContentType === 'drawing_and_list' && !drawingTarget) {
         throw new Error('PDF出力対象が見つかりません')
       }
 
       console.log('pdf export start')
 
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+
+      const selectedTableImage = await captureElement(selectedTableTarget)
+
+      let commonTableImage: string | null = null
+      if (separateCommonPage && commonIssues.length > 0) {
+        const commonTableTarget = commonTableExportRef.current
+        if (!commonTableTarget) {
+          throw new Error('共通指摘一覧表の出力対象が見つかりません')
+        }
+        commonTableImage = await captureElement(commonTableTarget)
+      }
+
       let drawingImageData: string | null = null
-      if (exportContentType === 'drawing_and_list' && target) {
+      if (exportContentType === 'drawing_and_list' && drawingTarget) {
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
         })
-        drawingImageData = await captureDrawingElement(target)
+        drawingImageData = await captureElement(drawingTarget)
       }
 
       const { blob, filename } = await buildInspectionReportPdf({
-        meta: {
-          projectName: project?.name ?? 'Project',
-          address: project?.address ?? '-',
-          contractorLabel: getExportContractorLabel(),
-          exportDate: new Date().toISOString().slice(0, 10),
-        },
-        issues: filteredIssues,
-        condition: exportCondition,
+        selectedTableImage,
+        commonTableImage,
         drawingImageData,
+        includeDrawing: exportContentType === 'drawing_and_list',
+        hasCommonPage: separateCommonPage && commonIssues.length > 0,
       })
 
       downloadPdfBlob(blob, filename)
       console.log('pdf export done')
-      toast.success('PDFを出力しました')
+      toast.success(`${exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
       console.error('pdf export error:', error)
       setExportError('PDF出力に失敗しました')
@@ -443,9 +475,8 @@ export default function DrawingEditorClient() {
     exportCondition,
     exportContentType,
     exportContractorId,
-    exportFilteredIssues,
     exportTarget,
-    getExportContractorLabel,
+    pdfExportSplit,
     project?.address,
     project?.name,
   ])
@@ -961,6 +992,46 @@ export default function DrawingEditorClient() {
                       </Button>
                     </CardContent>
                   </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm">出力プレビュー</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="overflow-hidden rounded border bg-slate-50">
+                        <div className="origin-top-left scale-[0.22]" style={{ width: 1122 }}>
+                          <PdfExportIssueTable
+                            title="検査指摘一覧表"
+                            projectName={project?.name ?? '物件名未設定'}
+                            address={project?.address ?? '-'}
+                            inspectionDate={inspectionDateLabel}
+                            exportDate={exportDateLabel}
+                            badgeLabel={pdfExportSplit.exportContractorLabel}
+                            badgeVariant={selectedTableBadgeVariant}
+                            issues={pdfExportSplit.selectedIssues}
+                          />
+                        </div>
+                      </div>
+                      {pdfExportSplit.separateCommonPage && pdfExportSplit.commonIssues.length > 0 ? (
+                        <div className="overflow-hidden rounded border bg-slate-50">
+                          <div className="origin-top-left scale-[0.22]" style={{ width: 1122 }}>
+                            <PdfExportIssueTable
+                              title="共通指摘一覧表"
+                              projectName={project?.name ?? '物件名未設定'}
+                              address={project?.address ?? '-'}
+                              inspectionDate={inspectionDateLabel}
+                              exportDate={exportDateLabel}
+                              badgeLabel="共通"
+                              badgeVariant="common"
+                              issues={pdfExportSplit.commonIssues}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                      <p className="text-xs text-muted-foreground">
+                        図面ページ：選択業者＋共通指摘のピン（{exportDrawingPageIssues.length}件 / 現在ページ）
+                      </p>
+                    </CardContent>
+                  </Card>
                 </div>
               </TabsContent>
             </Tabs>
@@ -1134,6 +1205,35 @@ export default function DrawingEditorClient() {
         }
         submitLabel={editingIssue ? '更新' : '保存'}
       />
+
+      <div className="pointer-events-none fixed left-[-12000px] top-0 z-[-1]" aria-hidden>
+        <div ref={selectedTableExportRef}>
+          <PdfExportIssueTable
+            title="検査指摘一覧表"
+            projectName={project?.name ?? '物件名未設定'}
+            address={project?.address ?? '-'}
+            inspectionDate={inspectionDateLabel}
+            exportDate={exportDateLabel}
+            badgeLabel={pdfExportSplit.exportContractorLabel}
+            badgeVariant={selectedTableBadgeVariant}
+            issues={pdfExportSplit.selectedIssues}
+          />
+        </div>
+        {pdfExportSplit.separateCommonPage && pdfExportSplit.commonIssues.length > 0 ? (
+          <div ref={commonTableExportRef}>
+            <PdfExportIssueTable
+              title="共通指摘一覧表"
+              projectName={project?.name ?? '物件名未設定'}
+              address={project?.address ?? '-'}
+              inspectionDate={inspectionDateLabel}
+              exportDate={exportDateLabel}
+              badgeLabel="共通"
+              badgeVariant="common"
+              issues={pdfExportSplit.commonIssues}
+            />
+          </div>
+        ) : null}
+      </div>
 
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogContent>
