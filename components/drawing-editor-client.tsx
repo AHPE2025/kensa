@@ -278,16 +278,16 @@ export default function DrawingEditorClient() {
           page_index: pageIndex ?? 0,
           floor_label: currentDrawing.floor_label ?? '1F',
           issue_type: values.issue_type,
-          issue_text: values.issue_text.trim() || null,
-          issue_category: values.issue_category || null,
+          issue_text: values.issue_text.trim() || '',
+          issue_category: values.issue_category || values.issue_type || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id
               : null,
           pin_x: addingPin.x,
           pin_y: addingPin.y,
-          callout_x: addingPin.x + 0.05,
-          callout_y: addingPin.y - 0.05,
+          callout_x: Math.min(1, Math.max(0, addingPin.x + 0.05)),
+          callout_y: Math.min(1, Math.max(0, addingPin.y - 0.05)),
           status: values.status || '未対応',
         }
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
@@ -337,8 +337,8 @@ export default function DrawingEditorClient() {
         const payload = {
           floor_label: currentDrawing?.floor_label ?? '1F',
           issue_type: values.issue_type,
-          issue_text: values.issue_text.trim() || null,
-          issue_category: values.issue_category || null,
+          issue_text: values.issue_text.trim() || '',
+          issue_category: values.issue_category || values.issue_type || null,
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id

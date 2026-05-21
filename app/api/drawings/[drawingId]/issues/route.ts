@@ -9,6 +9,16 @@ import { DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
 
+function toRatio(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.min(1, Math.max(0, numeric))
+}
+
+function resolveOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 export async function GET(request: NextRequest, { params }: Params) {
   const authed = await getAuthedClient(request)
   if ('error' in authed) return authed.error
@@ -128,8 +138,12 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const resolvedPinX = body.pin_x ?? body.x_ratio
   const resolvedPinY = body.pin_y ?? body.y_ratio
+  const resolvedProjectId = drawing.project_id
 
   const missing: string[] = []
+  if (!tenantId) missing.push('tenant_id')
+  if (!resolvedProjectId) missing.push('project_id')
+  if (!drawingId) missing.push('drawing_id')
   if (resolvedPinX === undefined || resolvedPinX === null) missing.push('pin_x')
   if (resolvedPinY === undefined || resolvedPinY === null) missing.push('pin_y')
 
@@ -145,29 +159,40 @@ export async function POST(request: NextRequest, { params }: Params) {
     )
   }
 
-  const pinX = Number(resolvedPinX)
-  const pinY = Number(resolvedPinY)
+  const pinX = toRatio(resolvedPinX, 0)
+  const pinY = toRatio(resolvedPinY, 0)
 
   const resolvedPageIndex =
     body.page_index === undefined || body.page_index === null
       ? 0
       : typeof body.page_index === 'number'
         ? body.page_index
-        : Number(body.page_index) || 0
+        : Number.isFinite(Number(body.page_index))
+          ? Number(body.page_index)
+          : 0
   const resolvedFloorLabel =
     (typeof body.floor_label === 'string' ? body.floor_label.trim() : '') ||
     drawing.floor_label ||
     '1F'
-  const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? pinX + 0.05
-  const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? pinY - 0.05
-  const issueTypeRaw = typeof body.issue_type === 'string' ? body.issue_type.trim() : ''
-  const resolvedIssueType = issueTypeRaw || null
-  const issueTextRaw = typeof body.issue_text === 'string' ? body.issue_text.trim() : ''
-  const resolvedIssueText = issueTextRaw || null
-  const resolvedContractorId =
-    typeof body.contractor_id === 'string' && body.contractor_id.trim() ? body.contractor_id : null
+  const defaultCalloutX = toRatio(pinX + 0.05, pinX)
+  const defaultCalloutY = toRatio(pinY - 0.05, pinY)
+  const resolvedCalloutX = toRatio(
+    body.callout_x ?? body.callout_x_ratio ?? defaultCalloutX,
+    defaultCalloutX,
+  )
+  const resolvedCalloutY = toRatio(
+    body.callout_y ?? body.callout_y_ratio ?? defaultCalloutY,
+    defaultCalloutY,
+  )
+  const resolvedIssueType =
+    resolveOptionalString(body.issue_type) ?? resolveOptionalString(body.issue_category) ?? 'その他'
+  const resolvedIssueText =
+    typeof body.issue_text === 'string' ? body.issue_text.trim() : ''
+  const resolvedContractorId = resolveOptionalString(body.contractor_id)
   const resolvedIssueCategory =
-    typeof body.issue_category === 'string' ? body.issue_category.trim() || null : null
+    resolveOptionalString(body.issue_category) ??
+    resolveOptionalString(body.issue_type) ??
+    null
 
   const tempFolderId = createTempIssueFolderId()
   let beforePhotoPath: string | null = null
