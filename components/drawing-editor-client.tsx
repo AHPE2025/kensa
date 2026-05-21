@@ -394,6 +394,23 @@ export default function DrawingEditorClient() {
     return 'contractor' as const
   }, [exportTarget])
 
+  const handleNavigateToPdfExport = useCallback(() => {
+    try {
+      if (!projectId || !drawingId) {
+        throw new Error('projectId or drawingId is missing')
+      }
+      console.log('navigate to pdf export:', { projectId, drawingId })
+      const contractorQuery =
+        listFilters.contractorId !== 'all'
+          ? `&contractorId=${encodeURIComponent(listFilters.contractorId)}`
+          : ''
+      router.push(`/projects/${projectId}/export?drawingId=${drawingId}${contractorQuery}`)
+    } catch (error) {
+      console.error('pdf export navigation error:', error)
+      toast.error('PDF出力に必要な情報が取得できません')
+    }
+  }, [drawingId, listFilters.contractorId, projectId, router])
+
   const handlePdfExport = useCallback(async () => {
     try {
       setIsExporting(true)
@@ -1156,10 +1173,7 @@ export default function DrawingEditorClient() {
             </Button>
             <Button
               className="h-12 bg-blue-600 hover:bg-blue-700"
-              onClick={() => {
-                setSidebarOpen(true)
-                setSidebarTab('exports')
-              }}
+              onClick={handleNavigateToPdfExport}
             >
               <Download className="mr-2 h-5 w-5" />
               PDF出力

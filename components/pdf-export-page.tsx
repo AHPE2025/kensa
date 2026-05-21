@@ -1,18 +1,10 @@
 'use client'
 
-import { useState, useMemo } from 'react'
-import {
-  ArrowLeft,
-  Download,
-  FileText,
-  Printer,
-  CheckCircle2,
-  AlertCircle,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { ArrowLeft, Download, FileText, Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
@@ -22,63 +14,353 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { useApp } from '@/lib/app-store'
-import { CONTRACTORS } from '@/lib/mock-data'
+import { authedFetch } from '@/lib/authed-fetch'
+import {
+  sortDrawingsByFloorLabel,
+  type Contractor,
+  type Drawing,
+  type Issue,
+  type Project,
+} from '@/lib/domain'
+import {
+  buildInspectionReportPdf,
+  captureElement,
+  downloadPdfBlob,
+  splitIssuesForPdfExport,
+  type PdfExportCondition,
+} from '@/lib/pdf-export-client'
+import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
+import { useAuthStore } from '@/lib/stores/auth-store'
 import { toast } from 'sonner'
 
-interface PdfExportPageProps {
-  projectId: string
+type DrawingRow = Drawing & {
+  signed_url: string | null
+  issue_count?: number
+  file_name?: string | null
 }
 
-export function PdfExportPage({ projectId }: PdfExportPageProps) {
-  const { projects, navigate } = useApp()
-  const project = projects.find((p) => p.id === projectId)
+const UNASSIGNED_CONTRACTOR_KEY = '__none__'
 
-  const [selectedContractorId, setSelectedContractorId] = useState('all')
-  const [selectedFloor, setSelectedFloor] = useState('all')
-  const [exportContent, setExportContent] = useState('list-and-drawing')
+const FALLBACK_CONTRACTOR_NAMES = [
+  'ウエハラ工芸',
+  '新星工業',
+  '幡成サッシ',
+  'SHIN鉄工',
+  'アルテエンジニアリング',
+  '栄光プロビジョン',
+  '富士機材',
+  '工藤工務店',
+] as const
 
-  const allIssues = useMemo(() => {
-    if (!project) return []
-    return project.drawings.flatMap((d) => d.issues)
+const FALLBACK_CONTRACTORS: Contractor[] = FALLBACK_CONTRACTOR_NAMES.map((name, index) => ({
+  id: `fallback-${index}`,
+  tenant_id: 'fallback',
+  name,
+  category: '開発用',
+  phone: null,
+  created_at: new Date(0).toISOString(),
+}))
+
+function resolveInitialExportTarget(contractorId: string | null): PdfExportCondition['exportTarget'] {
+  if (!contractorId || contractorId === 'all') return 'all'
+  if (contractorId === UNASSIGNED_CONTRACTOR_KEY) return 'unassigned'
+  return 'contractor'
+}
+
+export function PdfExportPage() {
+  const params = useParams<{ id: string }>()
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const user = useAuthStore((s) => s.user)
+  const loadingAuth = useAuthStore((s) => s.loading)
+
+  const projectId = params.id
+  const drawingId = searchParams.get('drawingId')
+  const initialContractorId = searchParams.get('contractorId')
+
+  const [project, setProject] = useState<Project | null>(null)
+  const [drawings, setDrawings] = useState<DrawingRow[]>([])
+  const [drawing, setDrawing] = useState<DrawingRow | null>(null)
+  const [contractors, setContractors] = useState<Contractor[]>([])
+  const [issues, setIssues] = useState<Issue[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [isExporting, setIsExporting] = useState(false)
+
+  const [exportTarget, setExportTarget] = useState<PdfExportCondition['exportTarget']>(
+    resolveInitialExportTarget(initialContractorId),
+  )
+  const [exportContractorId, setExportContractorId] = useState<string>(
+    initialContractorId && initialContractorId !== 'all' && initialContractorId !== UNASSIGNED_CONTRACTOR_KEY
+      ? initialContractorId
+      : 'all',
+  )
+  const [selectedFloor, setSelectedFloor] = useState<string>('all')
+  const [exportContent, setExportContent] = useState<'drawing_and_list' | 'drawing_only'>('drawing_and_list')
+  const exportContentType: PdfExportCondition['exportContentType'] = 'drawing_and_list'
+
+  const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
+  const commonTableExportRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!loadingAuth && !user) router.replace('/login')
+  }, [loadingAuth, user, router])
+
+  const loadData = useCallback(async () => {
+    if (!projectId || !drawingId) {
+      setLoadError('PDF出力に必要な情報が取得できません')
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    setLoadError(null)
+
+    try {
+      const [projectRes, drawingListRes, contractorRes, issueRes] = await Promise.all([
+        authedFetch(`/api/projects/${projectId}`),
+        authedFetch(`/api/projects/${projectId}/drawings`),
+        authedFetch(`/api/projects/${projectId}/contractors`),
+        authedFetch(`/api/drawings/${drawingId}/issues`),
+      ])
+
+      const projectData = (await projectRes.json()) as { project?: Project; error?: string }
+      const drawingListData = (await drawingListRes.json()) as { drawings?: DrawingRow[]; error?: string }
+      const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
+      const issueData = (await issueRes.json()) as {
+        drawing?: DrawingRow
+        issues?: Issue[]
+        error?: string
+      }
+
+      if (!projectRes.ok || !projectData.project) {
+        throw new Error(projectData.error ?? '物件情報の取得に失敗しました')
+      }
+      if (!drawingListRes.ok) {
+        throw new Error(drawingListData.error ?? '図面一覧の取得に失敗しました')
+      }
+      if (!contractorRes.ok) {
+        throw new Error(contractorData.error ?? '業者一覧の取得に失敗しました')
+      }
+      if (!issueRes.ok) {
+        throw new Error(issueData.error ?? '指摘一覧の取得に失敗しました')
+      }
+
+      const resolvedContractors =
+        (contractorData.contractors ?? []).length > 0
+          ? (contractorData.contractors ?? [])
+          : FALLBACK_CONTRACTORS
+
+      const drawingFromList =
+        (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
+      const resolvedDrawing = issueData.drawing
+        ? {
+            ...drawingFromList,
+            ...issueData.drawing,
+            storage_path: issueData.drawing.storage_path ?? issueData.drawing.file_path ?? null,
+          }
+        : drawingFromList
+
+      if (!resolvedDrawing) {
+        throw new Error('対象図面が見つかりません')
+      }
+
+      setProject(projectData.project)
+      setDrawings(drawingListData.drawings ?? [])
+      setDrawing(resolvedDrawing)
+      setContractors(resolvedContractors)
+      setIssues(issueData.issues ?? [])
+      setSelectedFloor(resolvedDrawing.floor_label)
+    } catch (error) {
+      console.error('pdf export navigation error:', error)
+      setLoadError('PDF出力に必要な情報が取得できません')
+    } finally {
+      setLoading(false)
+    }
+  }, [drawingId, projectId])
+
+  useEffect(() => {
+    if (user) void loadData()
+  }, [user, loadData])
+
+  const sortedDrawings = useMemo(() => sortDrawingsByFloorLabel(drawings), [drawings])
+  const floors = useMemo(() => sortedDrawings.map((item) => item.floor_label), [sortedDrawings])
+
+  const exportDateLabel = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const inspectionDateLabel = useMemo(
+    () => project?.inspection_date?.slice(0, 10) ?? exportDateLabel,
+    [exportDateLabel, project?.inspection_date],
+  )
+
+  const exportCondition = useMemo<PdfExportCondition>(
+    () => ({
+      exportTarget,
+      exportContractorId,
+      exportContentType,
+    }),
+    [exportTarget, exportContractorId, exportContentType],
+  )
+
+  const numberedIssues = useMemo(() => {
+    const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
+    return sorted.map((issue, index) => ({ ...issue, no: index + 1 }))
+  }, [issues])
+
+  const floorFilteredIssues = useMemo(() => {
+    if (selectedFloor === 'all') return numberedIssues
+    return numberedIssues.filter((issue) => issue.floor_label === selectedFloor)
+  }, [numberedIssues, selectedFloor])
+
+  const pdfExportSplit = useMemo(
+    () => splitIssuesForPdfExport(floorFilteredIssues, exportCondition, contractors),
+    [floorFilteredIssues, exportCondition, contractors],
+  )
+
+  const selectedTableBadgeVariant = useMemo(() => {
+    if (exportTarget === 'unassigned') return 'unassigned' as const
+    if (exportTarget === 'all') return 'all' as const
+    return 'contractor' as const
+  }, [exportTarget])
+
+  useEffect(() => {
+    if (!project) return
+    console.log('pdf export page project:', project)
   }, [project])
 
-  const filteredIssues = useMemo(() => {
-    return allIssues.filter((issue) => {
-      if (selectedContractorId !== 'all' && issue.contractorId !== selectedContractorId) return false
-      if (selectedFloor !== 'all' && issue.floor !== selectedFloor) return false
-      return true
-    })
-  }, [allIssues, selectedContractorId, selectedFloor])
+  useEffect(() => {
+    if (!drawing) return
+    console.log('pdf export page drawing:', drawing)
+  }, [drawing])
 
-  const selectedContractor =
-    selectedContractorId === 'all'
-      ? null
-      : CONTRACTORS.find((c) => c.id === selectedContractorId)
+  useEffect(() => {
+    console.log('pdf export page issues:', issues)
+  }, [issues])
 
-  if (!project) return null
+  useEffect(() => {
+    console.log('pdf export condition:', exportCondition)
+  }, [exportCondition])
 
-  const floors = [...new Set(project.drawings.map((d) => d.floor))]
+  const handleContractorChange = (value: string) => {
+    if (value === 'all') {
+      setExportTarget('all')
+      setExportContractorId('all')
+      return
+    }
+    if (value === UNASSIGNED_CONTRACTOR_KEY) {
+      setExportTarget('unassigned')
+      setExportContractorId('all')
+      return
+    }
+    setExportTarget('contractor')
+    setExportContractorId(value)
+  }
+
+  const contractorSelectValue = useMemo(() => {
+    if (exportTarget === 'all') return 'all'
+    if (exportTarget === 'unassigned') return UNASSIGNED_CONTRACTOR_KEY
+    return exportContractorId
+  }, [exportTarget, exportContractorId])
+
+  const handlePdfExport = useCallback(async () => {
+    try {
+      setIsExporting(true)
+
+      if (exportTarget === 'contractor' && exportContractorId === 'all') {
+        throw new Error('出力する業者を選択してください')
+      }
+
+      const { separateCommonPage, commonIssues, exportContractorLabel } = pdfExportSplit
+      const selectedTableTarget = selectedTableExportRef.current
+      if (exportContent === 'drawing_and_list' && !selectedTableTarget) {
+        throw new Error('指摘一覧表の出力対象が見つかりません')
+      }
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+
+      const selectedTableImage =
+        exportContent === 'drawing_and_list' && selectedTableTarget
+          ? await captureElement(selectedTableTarget)
+          : null
+
+      let commonTableImage: string | null = null
+      if (exportContent === 'drawing_and_list' && separateCommonPage && commonIssues.length > 0) {
+        const commonTableTarget = commonTableExportRef.current
+        if (!commonTableTarget) {
+          throw new Error('共通指摘一覧表の出力対象が見つかりません')
+        }
+        commonTableImage = await captureElement(commonTableTarget)
+      }
+
+      const { blob, filename } = await buildInspectionReportPdf({
+        selectedTableImage,
+        commonTableImage,
+        drawingImageData: null,
+        includeDrawing: exportContent === 'drawing_and_list' || exportContent === 'drawing_only',
+        hasCommonPage: exportContent === 'drawing_and_list' && separateCommonPage && commonIssues.length > 0,
+      })
+
+      downloadPdfBlob(blob, filename)
+      toast.success(`${exportContractorLabel}のPDFを出力しました`)
+    } catch (error) {
+      console.error('pdf export error:', error)
+      toast.error('PDF出力に失敗しました')
+    } finally {
+      setIsExporting(false)
+    }
+  }, [exportContent, exportContractorId, exportTarget, pdfExportSplit])
+
+  const backHref =
+    projectId && drawingId
+      ? `/projects/${projectId}/drawings/${drawingId}`
+      : projectId
+        ? `/projects/${projectId}`
+        : '/projects'
+
+  if (!projectId || !drawingId) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-6">
+        <Card className="max-w-md">
+          <CardContent className="p-6 text-center text-sm text-destructive">
+            PDF出力に必要な情報が取得できません
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <p className="text-sm text-muted-foreground">読み込み中...</p>
+      </div>
+    )
+  }
+
+  if (loadError || !project || !drawing) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-6">
+        <Card className="max-w-md">
+          <CardContent className="space-y-4 p-6 text-center">
+            <p className="text-sm text-destructive">
+              {loadError ?? 'PDF出力に必要な情報が取得できません'}
+            </p>
+            <Button variant="outline" onClick={() => router.push(backHref)}>
+              図面編集画面に戻る
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex h-screen flex-col bg-background overflow-hidden">
-      {/* Header */}
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
       <header className="flex h-14 items-center gap-3 border-b border-border bg-card px-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => navigate({ type: 'project-detail', projectId })}
-        >
+        <Button variant="ghost" size="icon" onClick={() => router.push(backHref)}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1">
@@ -88,26 +370,22 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
         <Button
           variant="outline"
           className="h-10 gap-2"
-          onClick={() => {
-            toast.success('全業者一括PDF出力を開始しました')
-          }}
+          onClick={() => toast.info('全業者一括出力は準備中です')}
         >
           <Printer className="h-4 w-4" />
           全業者一括出力
         </Button>
         <Button
-          className="h-10 gap-2"
-          onClick={() => {
-            toast.success('PDFを出力しました')
-          }}
+          className="h-10 gap-2 bg-blue-600 hover:bg-blue-700"
+          disabled={isExporting}
+          onClick={() => void handlePdfExport()}
         >
           <Download className="h-4 w-4" />
-          PDF出力
+          {isExporting ? 'PDF作成中...' : 'PDF出力'}
         </Button>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Settings panel */}
         <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-card lg:w-80">
           <div className="border-b border-border p-4">
             <h2 className="text-sm font-semibold text-foreground">出力設定</h2>
@@ -115,27 +393,18 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
 
           <ScrollArea className="flex-1">
             <div className="flex flex-col gap-6 p-4">
-              {/* Contractor selection */}
               <div className="flex flex-col gap-3">
                 <Label className="text-sm font-medium">業者選択</Label>
-                <Select
-                  value={selectedContractorId}
-                  onValueChange={setSelectedContractorId}
-                >
+                <Select value={contractorSelectValue} onValueChange={handleContractorChange}>
                   <SelectTrigger className="h-11">
                     <SelectValue placeholder="業者を選択" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">全業者</SelectItem>
-                    {CONTRACTORS.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        <div className="flex items-center gap-2">
-                          <div
-                            className="h-2 w-2 rounded-full"
-                            style={{ backgroundColor: c.color }}
-                          />
-                          {c.name}
-                        </div>
+                    <SelectItem value={UNASSIGNED_CONTRACTOR_KEY}>業者未定</SelectItem>
+                    {contractors.map((contractor) => (
+                      <SelectItem key={contractor.id} value={contractor.id}>
+                        {contractor.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -144,7 +413,6 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
 
               <Separator />
 
-              {/* Floor selection */}
               <div className="flex flex-col gap-3">
                 <Label className="text-sm font-medium">階選択</Label>
                 <Select value={selectedFloor} onValueChange={setSelectedFloor}>
@@ -153,9 +421,9 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">全階</SelectItem>
-                    {floors.map((f) => (
-                      <SelectItem key={f} value={f}>
-                        {f}
+                    {floors.map((floor) => (
+                      <SelectItem key={floor} value={floor}>
+                        {floor}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -164,18 +432,22 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
 
               <Separator />
 
-              {/* Export content */}
               <div className="flex flex-col gap-3">
                 <Label className="text-sm font-medium">出力内容</Label>
-                <RadioGroup value={exportContent} onValueChange={setExportContent}>
+                <RadioGroup
+                  value={exportContent}
+                  onValueChange={(value) =>
+                    setExportContent(value as 'drawing_and_list' | 'drawing_only')
+                  }
+                >
                   <div className="flex items-center gap-2">
-                    <RadioGroupItem value="list-and-drawing" id="pdf-list-and-drawing" />
+                    <RadioGroupItem value="drawing_and_list" id="pdf-list-and-drawing" />
                     <Label htmlFor="pdf-list-and-drawing" className="text-sm">
                       一覧＋図面
                     </Label>
                   </div>
                   <div className="flex items-center gap-2">
-                    <RadioGroupItem value="drawing-only" id="pdf-drawing-only" />
+                    <RadioGroupItem value="drawing_only" id="pdf-drawing-only" />
                     <Label htmlFor="pdf-drawing-only" className="text-sm">
                       図面のみ
                     </Label>
@@ -185,14 +457,13 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
 
               <Separator />
 
-              {/* Summary */}
               <Card className="bg-accent/50">
                 <CardContent className="p-4">
                   <div className="flex flex-col gap-2 text-sm">
                     <div className="flex items-center justify-between">
                       <span className="text-muted-foreground">対象業者</span>
                       <span className="font-medium text-foreground">
-                        {selectedContractor?.name ?? '全業者'}
+                        {pdfExportSplit.exportContractorLabel}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -203,7 +474,9 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-muted-foreground">指摘件数</span>
-                      <span className="font-bold text-foreground">{filteredIssues.length}件</span>
+                      <span className="font-bold text-foreground">
+                        {pdfExportSplit.selectedIssues.length}件
+                      </span>
                     </div>
                   </div>
                 </CardContent>
@@ -212,109 +485,94 @@ export function PdfExportPage({ projectId }: PdfExportPageProps) {
           </ScrollArea>
         </aside>
 
-        {/* Preview area */}
         <div className="flex-1 overflow-auto bg-muted/30 p-6">
-          <div className="mx-auto max-w-4xl">
-            {/* PDF Preview */}
-            <Card className="shadow-lg">
-              <CardContent className="p-8">
-                {/* Header */}
-                <div className="mb-6 border-b-2 border-foreground pb-4">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h2 className="text-xl font-bold text-foreground">検査指摘一覧表</h2>
-                      <p className="mt-1 text-sm text-muted-foreground">{project.name}</p>
-                      <p className="text-sm text-muted-foreground">{project.address}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm text-muted-foreground">
-                        検査日: {project.inspectionDate}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        出力日: {new Date().toISOString().split('T')[0]}
-                      </p>
-                      {selectedContractor && (
-                        <Badge
-                          className="mt-2 text-card"
-                          style={{ backgroundColor: selectedContractor.color }}
-                        >
-                          {selectedContractor.name}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
+          <div className="mx-auto max-w-4xl space-y-6">
+            {exportContent === 'drawing_and_list' ? (
+              <div className="overflow-hidden rounded-lg border bg-white shadow-lg">
+                <div className="origin-top-left scale-[0.72] md:scale-[0.85]" style={{ width: 1122 }}>
+                  <PdfExportIssueTable
+                    title="検査指摘一覧表"
+                    projectName={project.name}
+                    address={project.address}
+                    inspectionDate={inspectionDateLabel}
+                    exportDate={exportDateLabel}
+                    badgeLabel={pdfExportSplit.exportContractorLabel}
+                    badgeVariant={selectedTableBadgeVariant}
+                    issues={pdfExportSplit.selectedIssues}
+                  />
                 </div>
+              </div>
+            ) : null}
 
-                {/* Issue table */}
-                {filteredIssues.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12">No.</TableHead>
-                        <TableHead className="w-14">階</TableHead>
-                        <TableHead className="w-16">区分</TableHead>
-                        <TableHead>指摘内容</TableHead>
-                        <TableHead className="w-36">担当業者</TableHead>
-                        <TableHead className="w-16 text-center">状態</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredIssues.map((issue) => (
-                        <TableRow key={issue.id}>
-                          <TableCell className="font-mono text-sm">{issue.number}</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="text-xs">
-                              {issue.floor}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm">{issue.category}</TableCell>
-                          <TableCell className="text-sm">{issue.content}</TableCell>
-                          <TableCell className="text-sm">{issue.contractorName}</TableCell>
-                          <TableCell className="text-center">
-                            {issue.resolved ? (
-                              <CheckCircle2 className="mx-auto h-4 w-4 text-green-600" />
-                            ) : (
-                              <AlertCircle className="mx-auto h-4 w-4 text-destructive" />
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <div className="flex flex-col items-center py-16 text-muted-foreground">
-                    <FileText className="mb-3 h-10 w-10" />
-                    <p className="text-sm">該当する指摘がありません</p>
-                  </div>
-                )}
-
-                {/* Footer */}
-                <div className="mt-8 flex items-center justify-between border-t border-border pt-4 text-xs text-muted-foreground">
-                  <span>合計: {filteredIssues.length}件</span>
-                  <span>
-                    未対応: {filteredIssues.filter((i) => !i.resolved).length}件 / 対応済:{' '}
-                    {filteredIssues.filter((i) => i.resolved).length}件
-                  </span>
+            {exportContent === 'drawing_and_list' &&
+            pdfExportSplit.separateCommonPage &&
+            pdfExportSplit.commonIssues.length > 0 ? (
+              <div className="overflow-hidden rounded-lg border bg-white shadow-lg">
+                <div className="origin-top-left scale-[0.72] md:scale-[0.85]" style={{ width: 1122 }}>
+                  <PdfExportIssueTable
+                    title="共通指摘一覧表"
+                    projectName={project.name}
+                    address={project.address}
+                    inspectionDate={inspectionDateLabel}
+                    exportDate={exportDateLabel}
+                    badgeLabel="共通"
+                    badgeVariant="common"
+                    issues={pdfExportSplit.commonIssues}
+                  />
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            ) : null}
 
-            {/* Drawing preview placeholder */}
-            {exportContent === 'list-and-drawing' && filteredIssues.length > 0 && (
-              <Card className="mt-6 shadow-lg">
-                <CardContent className="flex items-center justify-center p-16">
-                  <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                    <FileText className="h-12 w-12" />
-                    <p className="text-sm font-medium">図面プレビュー</p>
-                    <p className="text-xs">
-                      指摘ピン付き図面がここに表示されます
-                    </p>
-                  </div>
+            {exportContent === 'drawing_and_list' || exportContent === 'drawing_only' ? (
+              <Card className="shadow-lg">
+                <CardContent className="flex flex-col items-center justify-center gap-3 p-16 text-muted-foreground">
+                  {drawing.signed_url ? (
+                    <iframe
+                      src={drawing.signed_url}
+                      title="図面プレビュー"
+                      className="h-[480px] w-full rounded border bg-white"
+                    />
+                  ) : (
+                    <>
+                      <FileText className="h-12 w-12" />
+                      <p className="text-sm font-medium">図面プレビュー</p>
+                      <p className="text-xs">指摘ピン付き図面がここに表示されます</p>
+                    </>
+                  )}
                 </CardContent>
               </Card>
-            )}
+            ) : null}
           </div>
         </div>
+      </div>
+
+      <div className="pointer-events-none fixed left-[-12000px] top-0 z-[-1]" aria-hidden>
+        <div ref={selectedTableExportRef}>
+          <PdfExportIssueTable
+            title="検査指摘一覧表"
+            projectName={project.name}
+            address={project.address}
+            inspectionDate={inspectionDateLabel}
+            exportDate={exportDateLabel}
+            badgeLabel={pdfExportSplit.exportContractorLabel}
+            badgeVariant={selectedTableBadgeVariant}
+            issues={pdfExportSplit.selectedIssues}
+          />
+        </div>
+        {pdfExportSplit.separateCommonPage && pdfExportSplit.commonIssues.length > 0 ? (
+          <div ref={commonTableExportRef}>
+            <PdfExportIssueTable
+              title="共通指摘一覧表"
+              projectName={project.name}
+              address={project.address}
+              inspectionDate={inspectionDateLabel}
+              exportDate={exportDateLabel}
+              badgeLabel="共通"
+              badgeVariant="common"
+              issues={pdfExportSplit.commonIssues}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   )
