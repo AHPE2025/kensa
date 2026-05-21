@@ -128,28 +128,42 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const resolvedPinX = body.pin_x ?? body.x_ratio
   const resolvedPinY = body.pin_y ?? body.y_ratio
-  const issueType = typeof body.issue_type === 'string' ? body.issue_type.trim() : ''
-  const issueText = typeof body.issue_text === 'string' ? body.issue_text.trim() : ''
 
   const missing: string[] = []
-  if (resolvedPinX === undefined) missing.push('pin_x')
-  if (resolvedPinY === undefined) missing.push('pin_y')
-  if (!issueType) missing.push('issue_type')
-  if (!issueText) missing.push('issue_text')
+  if (resolvedPinX === undefined || resolvedPinX === null) missing.push('pin_x')
+  if (resolvedPinY === undefined || resolvedPinY === null) missing.push('pin_y')
 
   if (missing.length > 0) {
-    console.error('create issue error:', { error: '必須項目が不足しています', missing })
+    console.error('create issue error:', { error: '必須項目が不足しています', missing, received: body })
     return NextResponse.json(
-      { error: '必須項目が不足しています', missing, details: { drawingId } },
+      {
+        error: '必須項目が不足しています',
+        missing,
+        received: body,
+      },
       { status: 400 },
     )
   }
 
-  const resolvedPageIndex = typeof body.page_index === 'number' ? body.page_index : 0
+  const pinX = Number(resolvedPinX)
+  const pinY = Number(resolvedPinY)
+
+  const resolvedPageIndex =
+    body.page_index === undefined || body.page_index === null
+      ? 0
+      : typeof body.page_index === 'number'
+        ? body.page_index
+        : Number(body.page_index) || 0
   const resolvedFloorLabel =
-    (typeof body.floor_label === 'string' ? body.floor_label.trim() : '') || drawing.floor_label
-  const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? (resolvedPinX as number) + 0.05
-  const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? (resolvedPinY as number) - 0.05
+    (typeof body.floor_label === 'string' ? body.floor_label.trim() : '') ||
+    drawing.floor_label ||
+    '1F'
+  const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? pinX + 0.05
+  const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? pinY - 0.05
+  const issueTypeRaw = typeof body.issue_type === 'string' ? body.issue_type.trim() : ''
+  const resolvedIssueType = issueTypeRaw || null
+  const issueTextRaw = typeof body.issue_text === 'string' ? body.issue_text.trim() : ''
+  const resolvedIssueText = issueTextRaw || null
   const resolvedContractorId =
     typeof body.contractor_id === 'string' && body.contractor_id.trim() ? body.contractor_id : null
   const resolvedIssueCategory =
@@ -195,12 +209,12 @@ export async function POST(request: NextRequest, { params }: Params) {
     drawing_id: drawingId,
     page_index: resolvedPageIndex,
     floor_label: resolvedFloorLabel,
-    pin_x: resolvedPinX,
-    pin_y: resolvedPinY,
+    pin_x: pinX,
+    pin_y: pinY,
     callout_x: resolvedCalloutX,
     callout_y: resolvedCalloutY,
-    issue_type: issueType,
-    issue_text: issueText,
+    issue_type: resolvedIssueType,
+    issue_text: resolvedIssueText,
     contractor_id: resolvedContractorId,
     status: typeof body.status === 'string' ? body.status : '未対応',
     before_photo_path: beforePhotoPath,
