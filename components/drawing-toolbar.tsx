@@ -24,39 +24,42 @@ import type { EditorMode } from '@/lib/stores/editor-store'
 
 interface DrawingToolbarProps {
   drawings: Drawing[]
-  currentDrawingId: string
+  currentFloorLabel: string
+  currentDrawingIndex: number
+  totalDrawings: number
   mode: EditorMode
   zoom: number
-  pageIndex: number
-  totalPages: number
   rotation: number
   onBack: () => void
-  onChangeDrawing: (drawingId: string) => void
+  onChangeDrawing: (floorLabel: string) => void
   onChangeMode: (mode: EditorMode) => void
   onZoomIn: () => void
   onZoomOut: () => void
-  onPrevPage: () => void
-  onNextPage: () => void
+  onPrevDrawing: () => void
+  onNextDrawing: () => void
   onRotate: () => void
 }
 
 export function DrawingToolbar({
   drawings,
-  currentDrawingId,
+  currentFloorLabel,
+  currentDrawingIndex,
+  totalDrawings,
   mode,
   zoom,
-  pageIndex,
-  totalPages,
   rotation,
   onBack,
   onChangeDrawing,
   onChangeMode,
   onZoomIn,
   onZoomOut,
-  onPrevPage,
-  onNextPage,
+  onPrevDrawing,
+  onNextDrawing,
   onRotate,
 }: DrawingToolbarProps) {
+  const displayIndex = currentDrawingIndex >= 0 ? currentDrawingIndex + 1 : 1
+  const displayTotal = totalDrawings > 0 ? totalDrawings : 1
+
   return (
     <header className="flex flex-wrap items-center gap-2 border-b border-border bg-white px-3 py-2">
       <Button variant="ghost" size="icon" className="shrink-0" onClick={onBack}>
@@ -65,13 +68,13 @@ export function DrawingToolbar({
 
       <div className="h-6 w-px bg-border" />
 
-      <Select value={currentDrawingId} onValueChange={onChangeDrawing}>
+      <Select value={currentFloorLabel} onValueChange={onChangeDrawing}>
         <SelectTrigger className="h-9 w-28">
           <SelectValue placeholder="階選択" />
         </SelectTrigger>
         <SelectContent>
           {drawings.map((d) => (
-            <SelectItem key={d.id} value={d.id}>
+            <SelectItem key={d.id} value={d.floor_label}>
               {d.floor_label}
             </SelectItem>
           ))}
@@ -83,20 +86,20 @@ export function DrawingToolbar({
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          disabled={pageIndex <= 0}
-          onClick={onPrevPage}
+          disabled={currentDrawingIndex <= 0}
+          onClick={onPrevDrawing}
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
-        <span className="text-xs text-muted-foreground min-w-[40px] text-center">
-          {pageIndex + 1}/{totalPages}
+        <span className="text-xs text-muted-foreground min-w-[56px] text-center whitespace-nowrap">
+          {displayIndex}/{displayTotal} 図面
         </span>
         <Button
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          disabled={pageIndex >= totalPages - 1}
-          onClick={onNextPage}
+          disabled={currentDrawingIndex < 0 || currentDrawingIndex >= totalDrawings - 1}
+          onClick={onNextDrawing}
         >
           <ChevronRight className="h-4 w-4" />
         </Button>

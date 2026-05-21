@@ -23,7 +23,7 @@ import { createTempIssueFolderId } from '@/lib/issue-photo-paths'
 import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
-import { ISSUE_TYPES, type Contractor, type Drawing, type Issue, type IssueFormValues } from '@/lib/domain'
+import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues } from '@/lib/domain'
 import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel } from '@/components/issue-list-panel'
@@ -144,7 +144,10 @@ export default function DrawingEditorClient() {
       const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
       const issueData = (await issueRes.json()) as { drawing?: DrawingRow; issues?: Issue[]; error?: string }
 
-      if (!drawingListRes.ok) return toast.error(drawingListData.error ?? '図面取得失敗')
+      if (!drawingListRes.ok) {
+        console.error('load project drawings error:', drawingListData.error ?? '図面取得失敗')
+        return toast.error(drawingListData.error ?? '図面取得失敗')
+      }
       if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
       if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
 
@@ -173,7 +176,7 @@ export default function DrawingEditorClient() {
         setListFilters((prev) => ({ ...prev, floorLabel: 'all' }))
       }
     } catch (error) {
-      console.error('contractors load error:', error)
+      console.error('load project drawings error:', error)
       toast.error('業者取得失敗')
     }
   }
@@ -230,10 +233,30 @@ export default function DrawingEditorClient() {
     })
   }, [listFilters, numberedIssues, pageIndex, visibleContractorIds])
 
-  const floors = useMemo(() => {
-    const set = new Set(drawings.map((drawing) => drawing.floor_label))
-    return Array.from(set)
-  }, [drawings])
+  const sortedDrawings = useMemo(() => sortDrawingsByFloorLabel(drawings), [drawings])
+
+  const currentDrawingIndex = useMemo(
+    () => sortedDrawings.findIndex((drawing) => drawing.id === drawingId),
+    [sortedDrawings, drawingId],
+  )
+
+  const totalDrawings = sortedDrawings.length
+  const prevDrawing = currentDrawingIndex > 0 ? sortedDrawings[currentDrawingIndex - 1] : null
+  const nextDrawing =
+    currentDrawingIndex >= 0 && currentDrawingIndex < sortedDrawings.length - 1
+      ? sortedDrawings[currentDrawingIndex + 1]
+      : null
+
+  useEffect(() => {
+    console.log('project drawings:', drawings)
+    console.log('sorted drawings:', sortedDrawings)
+    console.log('current drawing index:', currentDrawingIndex)
+    console.log('current drawing id:', drawingId)
+    console.log('next drawing:', nextDrawing)
+    console.log('prev drawing:', prevDrawing)
+  }, [drawings, sortedDrawings, currentDrawingIndex, drawingId, nextDrawing, prevDrawing])
+
+  const floors = useMemo(() => sortedDrawings.map((drawing) => drawing.floor_label), [sortedDrawings])
 
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
   const isFallbackContractor = useCallback((contractorId: string) => contractorId.startsWith('fallback-'), [])
@@ -600,20 +623,35 @@ export default function DrawingEditorClient() {
   return (
     <main className="flex h-screen flex-col bg-slate-50">
       <DrawingToolbar
-        drawings={drawings}
-        currentDrawingId={currentDrawing?.id ?? ''}
+        drawings={sortedDrawings}
+        currentFloorLabel={currentDrawing?.floor_label ?? ''}
+        currentDrawingIndex={currentDrawingIndex}
+        totalDrawings={totalDrawings}
         mode={mode}
         zoom={zoom}
-        pageIndex={pageIndex}
-        totalPages={totalPages}
         rotation={rotation}
         onBack={() => router.push(`/projects/${projectId}`)}
-        onChangeDrawing={(value) => router.push(`/projects/${projectId}/drawings/${value}`)}
+        onChangeDrawing={(floorLabel) => {
+          const drawing = sortedDrawings.find((item) => item.floor_label === floorLabel)
+          if (drawing) {
+            router.push(`/projects/${projectId}/drawings/${drawing.id}`)
+            return
+          }
+          toast.error('この階の図面は登録されていません')
+        }}
         onChangeMode={setMode}
         onZoomIn={() => setZoom(Math.min(2.5, zoom + 0.1))}
         onZoomOut={() => setZoom(Math.max(0.5, zoom - 0.1))}
-        onPrevPage={() => setPageIndex((value) => Math.max(value - 1, 0))}
-        onNextPage={() => setPageIndex((value) => Math.min(value + 1, totalPages - 1))}
+        onPrevDrawing={() => {
+          if (prevDrawing) {
+            router.push(`/projects/${projectId}/drawings/${prevDrawing.id}`)
+          }
+        }}
+        onNextDrawing={() => {
+          if (nextDrawing) {
+            router.push(`/projects/${projectId}/drawings/${nextDrawing.id}`)
+          }
+        }}
         onRotate={() => setRotation((prev) => (prev + 90) % 360)}
       />
       <div className="flex min-h-0 flex-1">

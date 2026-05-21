@@ -11,6 +11,20 @@ export const DRAWING_FLOOR_LABEL_OPTIONS = [
 
 export const DEFAULT_DRAWING_FLOOR_LABEL = '1F' as const
 
+export const DRAWING_FLOOR_ORDER = DRAWING_FLOOR_LABEL_OPTIONS
+
+export function compareFloorLabels(a: string, b: string): number {
+  const indexA = DRAWING_FLOOR_ORDER.indexOf(a as (typeof DRAWING_FLOOR_ORDER)[number])
+  const indexB = DRAWING_FLOOR_ORDER.indexOf(b as (typeof DRAWING_FLOOR_ORDER)[number])
+  const orderA = indexA === -1 ? Number.MAX_SAFE_INTEGER : indexA
+  const orderB = indexB === -1 ? Number.MAX_SAFE_INTEGER : indexB
+  return orderA - orderB
+}
+
+export function sortDrawingsByFloorLabel<T extends { floor_label: string }>(drawings: T[]): T[] {
+  return [...drawings].sort((a, b) => compareFloorLabels(a.floor_label, b.floor_label))
+}
+
 export type IssueType = (typeof ISSUE_TYPES)[number]
 
 export type Profile = {
