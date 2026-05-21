@@ -413,7 +413,6 @@ export default function DrawingEditorClient() {
       } = pdfExportSplit
 
       console.log('pdf export condition:', exportCondition)
-      console.log('pdf export issues:', drawingIssues)
       console.log('selected contractor:', selectedContractor)
       console.log('selected issues:', selectedIssues)
       console.log('common issues:', commonIssues)
