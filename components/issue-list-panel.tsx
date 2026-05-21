@@ -164,6 +164,18 @@ export function IssueListPanel({
                 <p className="line-clamp-2 text-xs leading-relaxed text-foreground">
                   {issue.issue_text?.trim() ? issue.issue_text : '未入力'}
                 </p>
+                <div className="flex flex-wrap items-center gap-1">
+                  {(issue.before_photo_path || issue.before_photo_url) && (
+                    <Badge variant="outline" className="text-[9px] px-1 py-0">
+                      ビフォー写真あり
+                    </Badge>
+                  )}
+                  {(issue.after_photo_path || issue.after_photo_url) && (
+                    <Badge variant="outline" className="text-[9px] px-1 py-0">
+                      アフター写真あり
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[10px] text-muted-foreground">{contractorName}</p>
                   <Button

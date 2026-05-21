@@ -92,3 +92,15 @@ with check (
   bucket_id = 'drawings-images'
   and (storage.foldername(name))[1] = public.current_tenant_id()::text
 );
+
+drop policy if exists "issue_photos_rw_tenant" on storage.objects;
+create policy "issue_photos_rw_tenant" on storage.objects
+for all to authenticated
+using (
+  bucket_id = 'issue-photos'
+  and (storage.foldername(name))[1] = public.current_tenant_id()::text
+)
+with check (
+  bucket_id = 'issue-photos'
+  and (storage.foldername(name))[1] = public.current_tenant_id()::text
+);

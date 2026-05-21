@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -19,26 +19,86 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ISSUE_TYPES, type Contractor } from '@/lib/domain'
-import { Search } from 'lucide-react'
-
-type IssueFormValues = {
-  issue_type: string
-  issue_text: string
-  contractor_id: string
-  issue_category: string
-  status: string
-}
+import { ISSUE_PHOTO_ACCEPT } from '@/lib/issue-photos'
+import { ISSUE_TYPES, type Contractor, type IssueFormValues } from '@/lib/domain'
+import { Search, X } from 'lucide-react'
 
 type IssueModalProps = {
   open: boolean
   title: string
   contractors: Contractor[]
-  defaultValues: IssueFormValues
+  defaultValues: Omit<IssueFormValues, 'beforePhotoFile' | 'afterPhotoFile' | 'clearBeforePhoto' | 'clearAfterPhoto'>
+  defaultBeforePhotoUrl?: string | null
+  defaultAfterPhotoUrl?: string | null
   onClose: () => void
   onSave: (values: IssueFormValues) => void
   onSaveAndNext?: (values: IssueFormValues) => void
   submitLabel?: string
+}
+
+function PhotoSlot({
+  label,
+  placeholder,
+  previewUrl,
+  onSelectFile,
+  onClear,
+}: {
+  label: string
+  placeholder: string
+  previewUrl: string | null
+  onSelectFile: (file: File) => void
+  onClear: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  return (
+    <div className="rounded-md border border-dashed p-3">
+      <Label className="mb-2 block font-medium">{label}</Label>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ISSUE_PHOTO_ACCEPT}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) onSelectFile(file)
+          event.target.value = ''
+        }}
+      />
+      <button
+        type="button"
+        className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-muted text-xs text-muted-foreground transition-colors hover:bg-muted/80"
+        onClick={() => inputRef.current?.click()}
+      >
+        {previewUrl ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={previewUrl} alt={label} className="h-full w-full object-cover" />
+            <span
+              role="button"
+              tabIndex={0}
+              className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+              onClick={(event) => {
+                event.stopPropagation()
+                onClear()
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onClear()
+                }
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </span>
+          </>
+        ) : (
+          <span className="px-2 text-center">{placeholder}</span>
+        )}
+      </button>
+    </div>
+  )
 }
 
 export function IssueModal({
@@ -46,19 +106,47 @@ export function IssueModal({
   title,
   contractors,
   defaultValues,
+  defaultBeforePhotoUrl,
+  defaultAfterPhotoUrl,
   onClose,
   onSave,
   onSaveAndNext,
   submitLabel = '保存',
 }: IssueModalProps) {
-  const [form, setForm] = useState<IssueFormValues>(defaultValues)
+  const [form, setForm] = useState(defaultValues)
   const [contractorSearch, setContractorSearch] = useState('')
+  const [beforePhotoFile, setBeforePhotoFile] = useState<File | null>(null)
+  const [afterPhotoFile, setAfterPhotoFile] = useState<File | null>(null)
+  const [clearBeforePhoto, setClearBeforePhoto] = useState(false)
+  const [clearAfterPhoto, setClearAfterPhoto] = useState(false)
+  const [beforePreviewUrl, setBeforePreviewUrl] = useState<string | null>(null)
+  const [afterPreviewUrl, setAfterPreviewUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
     setForm(defaultValues)
     setContractorSearch('')
-  }, [open, defaultValues])
+    setBeforePhotoFile(null)
+    setAfterPhotoFile(null)
+    setClearBeforePhoto(false)
+    setClearAfterPhoto(false)
+    setBeforePreviewUrl(defaultBeforePhotoUrl ?? null)
+    setAfterPreviewUrl(defaultAfterPhotoUrl ?? null)
+  }, [open, defaultValues, defaultBeforePhotoUrl, defaultAfterPhotoUrl])
+
+  useEffect(() => {
+    if (!beforePhotoFile) return
+    const objectUrl = URL.createObjectURL(beforePhotoFile)
+    setBeforePreviewUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [beforePhotoFile])
+
+  useEffect(() => {
+    if (!afterPhotoFile) return
+    const objectUrl = URL.createObjectURL(afterPhotoFile)
+    setAfterPreviewUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [afterPhotoFile])
 
   const filteredContractors = useMemo(() => {
     const key = contractorSearch.trim().toLowerCase()
@@ -66,13 +154,21 @@ export function IssueModal({
     return contractors.filter((contractor) => contractor.name.toLowerCase().includes(key))
   }, [contractors, contractorSearch])
 
+  const buildFormValues = (): IssueFormValues => ({
+    ...form,
+    beforePhotoFile,
+    afterPhotoFile,
+    clearBeforePhoto,
+    clearAfterPhoto,
+  })
+
   const handleSave = () => {
-    onSave(form)
+    onSave(buildFormValues())
   }
 
   const handleSaveAndNext = () => {
     if (!onSaveAndNext) return
-    onSaveAndNext(form)
+    onSaveAndNext(buildFormValues())
   }
 
   const selectedContractorValue =
@@ -178,18 +274,34 @@ export function IssueModal({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-md border border-dashed p-3">
-              <Label className="mb-2 block font-medium">ビフォー写真</Label>
-              <div className="flex h-20 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
-                UI枠のみ（後続実装）
-              </div>
-            </div>
-            <div className="rounded-md border border-dashed p-3">
-              <Label className="mb-2 block font-medium">アフター写真</Label>
-              <div className="flex h-20 items-center justify-center rounded bg-muted text-xs text-muted-foreground">
-                UI枠のみ（後続実装）
-              </div>
-            </div>
+            <PhotoSlot
+              label="ビフォー写真"
+              placeholder="クリックしてビフォー写真を追加"
+              previewUrl={beforePreviewUrl}
+              onSelectFile={(file) => {
+                setBeforePhotoFile(file)
+                setClearBeforePhoto(false)
+              }}
+              onClear={() => {
+                setBeforePhotoFile(null)
+                setBeforePreviewUrl(null)
+                setClearBeforePhoto(true)
+              }}
+            />
+            <PhotoSlot
+              label="アフター写真"
+              placeholder="クリックしてアフター写真を追加"
+              previewUrl={afterPreviewUrl}
+              onSelectFile={(file) => {
+                setAfterPhotoFile(file)
+                setClearAfterPhoto(false)
+              }}
+              onClear={() => {
+                setAfterPhotoFile(null)
+                setAfterPreviewUrl(null)
+                setClearAfterPhoto(true)
+              }}
+            />
           </div>
         </div>
 

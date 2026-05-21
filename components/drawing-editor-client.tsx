@@ -21,7 +21,7 @@ import {
 import { authedFetch } from '@/lib/authed-fetch'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
-import { ISSUE_TYPES, type Contractor, type Drawing, type Issue } from '@/lib/domain'
+import { ISSUE_TYPES, type Contractor, type Drawing, type Issue, type IssueFormValues } from '@/lib/domain'
 import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel } from '@/components/issue-list-panel'
@@ -34,14 +34,6 @@ type DrawingRow = Drawing & {
   issue_count: number
   file_name: string
   signed_page_urls?: Array<string | null>
-}
-
-type IssueFormValues = {
-  issue_type: string
-  issue_text: string
-  contractor_id: string
-  issue_category: string
-  status: string
 }
 
 type IssueResponse = {
@@ -244,6 +236,37 @@ export default function DrawingEditorClient() {
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
   const isFallbackContractor = useCallback((contractorId: string) => contractorId.startsWith('fallback-'), [])
 
+  const buildIssueFormData = useCallback((payload: Record<string, unknown>, values: IssueFormValues) => {
+    console.log('before photo file:', values.beforePhotoFile)
+    console.log('after photo file:', values.afterPhotoFile)
+
+    const hasPhotos =
+      values.beforePhotoFile ||
+      values.afterPhotoFile ||
+      values.clearBeforePhoto ||
+      values.clearAfterPhoto
+
+    if (!hasPhotos) {
+      return null
+    }
+
+    const formData = new FormData()
+    formData.append('payload', JSON.stringify(payload))
+    if (values.beforePhotoFile) {
+      formData.append('before_photo', values.beforePhotoFile)
+    }
+    if (values.afterPhotoFile) {
+      formData.append('after_photo', values.afterPhotoFile)
+    }
+    if (values.clearBeforePhoto) {
+      formData.append('clear_before_photo', 'true')
+    }
+    if (values.clearAfterPhoto) {
+      formData.append('clear_after_photo', 'true')
+    }
+    return formData
+  }, [])
+
   const createIssue = useCallback(
     async (values: IssueFormValues, continueMode: boolean) => {
       if (!addingPin || !currentDrawing) return
@@ -270,16 +293,24 @@ export default function DrawingEditorClient() {
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
         console.log('auto floor_label:', currentDrawing?.floor_label)
 
+        const formData = buildIssueFormData(payload, values)
         const response = await authedFetch(`/api/drawings/${drawingId}/issues`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          ...(formData
+            ? { body: formData }
+            : {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              }),
         })
         const data = (await response.json()) as IssueResponse
         if (!response.ok || !data.issue) {
-          const errorMessage = Array.isArray(data.missing) && data.missing.length > 0
-            ? `${data.error ?? '保存失敗'}: ${data.missing.join(', ')}`
-            : data.error ?? '保存失敗'
+          const errorMessage =
+            data.error === '写真のアップロードに失敗しました'
+              ? data.error
+              : Array.isArray(data.missing) && data.missing.length > 0
+                ? `${data.error ?? '保存失敗'}: ${data.missing.join(', ')}`
+                : data.error ?? '保存失敗'
           console.error('create issue error:', data)
           toast.error(errorMessage)
           return
@@ -297,7 +328,7 @@ export default function DrawingEditorClient() {
         toast.error('保存失敗')
       }
     },
-    [addingPin, currentDrawing, drawingId, isFallbackContractor, pageIndex, projectId, refetchIssues, setMode, user?.id],
+    [addingPin, buildIssueFormData, currentDrawing, drawingId, isFallbackContractor, pageIndex, projectId, refetchIssues, setMode, user?.id],
   )
 
   const updateIssue = useCallback(
@@ -315,16 +346,24 @@ export default function DrawingEditorClient() {
           status: values.status || '未対応',
         }
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
+        const formData = buildIssueFormData(payload, values)
         const response = await authedFetch(`/api/issues/${targetIssue.id}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          ...(formData
+            ? { body: formData }
+            : {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              }),
         })
       const data = (await response.json()) as { issue?: Issue; error?: string; missing?: string[] }
         if (!response.ok || !data.issue) {
-          const errorMessage = Array.isArray(data.missing) && data.missing.length > 0
-            ? `${data.error ?? '更新に失敗しました'}: ${data.missing.join(', ')}`
-            : data.error ?? '更新に失敗しました'
+          const errorMessage =
+            data.error === '写真のアップロードに失敗しました'
+              ? data.error
+              : Array.isArray(data.missing) && data.missing.length > 0
+                ? `${data.error ?? '更新に失敗しました'}: ${data.missing.join(', ')}`
+                : data.error ?? '更新に失敗しました'
           console.error('create issue error:', data.error ?? data)
           toast.error(errorMessage)
           return
@@ -339,7 +378,7 @@ export default function DrawingEditorClient() {
         toast.error('更新に失敗しました')
       }
     },
-    [currentDrawing?.floor_label, isFallbackContractor, refetchIssues],
+    [buildIssueFormData, currentDrawing?.floor_label, isFallbackContractor, refetchIssues],
   )
 
   const deleteIssue = async () => {
@@ -714,6 +753,8 @@ export default function DrawingEditorClient() {
           issue_category: editingIssue?.issue_category ?? '',
           status: editingIssue?.status === 'done' ? '完了' : editingIssue?.status ?? '未対応',
         }}
+        defaultBeforePhotoUrl={editingIssue?.before_photo_url ?? null}
+        defaultAfterPhotoUrl={editingIssue?.after_photo_url ?? null}
         onClose={() => {
           setIssueModalOpen(false)
           setAddingPin(null)

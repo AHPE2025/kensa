@@ -63,6 +63,18 @@ export type Contractor = {
   created_at: string
 }
 
+export type IssueFormValues = {
+  issue_type: string
+  issue_text: string
+  contractor_id: string
+  issue_category: string
+  status: string
+  beforePhotoFile: File | null
+  afterPhotoFile: File | null
+  clearBeforePhoto: boolean
+  clearAfterPhoto: boolean
+}
+
 export type Issue = {
   id: string
   tenant_id: string
@@ -79,6 +91,10 @@ export type Issue = {
   issue_text: string | null
   contractor_id: string | null
   status: string
+  before_photo_path?: string | null
+  after_photo_path?: string | null
+  before_photo_url?: string | null
+  after_photo_url?: string | null
   created_by: string
   created_at: string
   contractor?: { id: string; name: string } | null

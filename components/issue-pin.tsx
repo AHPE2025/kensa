@@ -38,6 +38,20 @@ export function IssuePin({
   const pinColor = isSelected ? '#dc2626' : basePinColor
   const calloutBg = isSelected ? '#fee2e2' : isDone ? '#f0fdf4' : isInProgress ? '#fffbeb' : '#eff6ff'
   const contractorLabel = issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
+  const photoLines = [
+    issue.before_photo_path || issue.before_photo_url ? 'ビフォー写真あり' : '',
+    issue.after_photo_path || issue.after_photo_url ? 'アフター写真あり' : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const calloutText = [
+    `#${issue.no} ${issue.issue_type}`,
+    issue.issue_text?.trim() ? issue.issue_text.slice(0, 30) : '未入力',
+    contractorLabel,
+    photoLines,
+  ]
+    .filter(Boolean)
+    .join('\n')
 
   return (
     <>
@@ -103,7 +117,7 @@ export function IssuePin({
           fontSize={11}
           lineHeight={1.3}
           fill="#0f172a"
-          text={`#${issue.no} ${issue.issue_type}\n${issue.issue_text?.trim() ? issue.issue_text.slice(0, 30) : '未入力'}\n${contractorLabel}`}
+          text={calloutText}
         />
       </Label>
     </>

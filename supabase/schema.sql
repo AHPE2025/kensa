@@ -67,6 +67,10 @@ create table if not exists public.issues (
   created_at timestamptz not null default now()
 );
 
+alter table public.issues add column if not exists issue_category text;
+alter table public.issues add column if not exists before_photo_path text;
+alter table public.issues add column if not exists after_photo_path text;
+
 create table if not exists public.issue_media (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
@@ -93,4 +97,8 @@ on conflict (id) do nothing;
 
 insert into storage.buckets (id, name, public)
 values ('exports-pdf', 'exports-pdf', false)
+on conflict (id) do nothing;
+
+insert into storage.buckets (id, name, public)
+values ('issue-photos', 'issue-photos', false)
 on conflict (id) do nothing;

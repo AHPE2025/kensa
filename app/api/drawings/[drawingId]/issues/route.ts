@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
+import {
+  attachIssuePhotoSignedUrls,
+  createTempIssueFolderId,
+  uploadIssuePhotoFile,
+} from '@/lib/issue-photos'
 import { DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
@@ -74,7 +79,12 @@ export async function GET(request: NextRequest, { params }: Params) {
         file_name: drawing.file_name ?? null,
       }
     : null
-  return NextResponse.json({ drawing: drawingWithStoragePath, issues: issues ?? [] })
+
+  const issuesWithPhotoUrls = await Promise.all(
+    (issues ?? []).map((issue) => attachIssuePhotoSignedUrls(client, issue)),
+  )
+
+  return NextResponse.json({ drawing: drawingWithStoragePath, issues: issuesWithPhotoUrls })
 }
 
 export async function POST(request: NextRequest, { params }: Params) {
@@ -82,27 +92,27 @@ export async function POST(request: NextRequest, { params }: Params) {
   if ('error' in authed) return authed.error
   const { client, tenantId, user } = authed
   const { drawingId } = await params
-  const body = (await request.json()) as {
-    page_index?: number
-    floor_label?: string
-    x_ratio?: number
-    y_ratio?: number
-    callout_x_ratio?: number
-    callout_y_ratio?: number
-    pin_x?: number
-    pin_y?: number
-    callout_x?: number
-    callout_y?: number
-    issue_category?: string | null
-    issue_type?: string
-    issue_text?: string
-    contractor_id?: string | null
-    status?: string
-    tenant_id?: string
-    project_id?: string
-    drawing_id?: string
+
+  const contentType = request.headers.get('content-type') ?? ''
+  let body: Record<string, unknown> = {}
+  let beforePhotoFile: File | null = null
+  let afterPhotoFile: File | null = null
+
+  if (contentType.includes('multipart/form-data')) {
+    const formData = await request.formData()
+    const payloadRaw = formData.get('payload')
+    body = payloadRaw ? (JSON.parse(String(payloadRaw)) as Record<string, unknown>) : {}
+    const beforePhoto = formData.get('before_photo')
+    const afterPhoto = formData.get('after_photo')
+    beforePhotoFile = beforePhoto instanceof File && beforePhoto.size > 0 ? beforePhoto : null
+    afterPhotoFile = afterPhoto instanceof File && afterPhoto.size > 0 ? afterPhoto : null
+  } else {
+    body = (await request.json()) as Record<string, unknown>
   }
+
   console.log('issue request body:', body)
+  console.log('before photo file:', beforePhotoFile)
+  console.log('after photo file:', afterPhotoFile)
 
   const { data: drawing, error: drawingError } = await client
     .from('drawings')
@@ -118,13 +128,14 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   const resolvedPinX = body.pin_x ?? body.x_ratio
   const resolvedPinY = body.pin_y ?? body.y_ratio
-  const issueType = body.issue_type?.trim()
-  const issueText = body.issue_text?.trim() || null
+  const issueType = typeof body.issue_type === 'string' ? body.issue_type.trim() : ''
+  const issueText = typeof body.issue_text === 'string' ? body.issue_text.trim() : ''
 
   const missing: string[] = []
   if (resolvedPinX === undefined) missing.push('pin_x')
   if (resolvedPinY === undefined) missing.push('pin_y')
   if (!issueType) missing.push('issue_type')
+  if (!issueText) missing.push('issue_text')
 
   if (missing.length > 0) {
     console.error('create issue error:', { error: '必須項目が不足しています', missing })
@@ -134,12 +145,49 @@ export async function POST(request: NextRequest, { params }: Params) {
     )
   }
 
-  const resolvedPageIndex = body.page_index ?? 0
-  const resolvedFloorLabel = body.floor_label?.trim() || drawing.floor_label
-  const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? (resolvedPinX + 0.05)
-  const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? (resolvedPinY - 0.05)
-  const resolvedContractorId = body.contractor_id && body.contractor_id.trim() ? body.contractor_id : null
-  const resolvedIssueCategory = body.issue_category?.trim() || null
+  const resolvedPageIndex = typeof body.page_index === 'number' ? body.page_index : 0
+  const resolvedFloorLabel =
+    (typeof body.floor_label === 'string' ? body.floor_label.trim() : '') || drawing.floor_label
+  const resolvedCalloutX = body.callout_x ?? body.callout_x_ratio ?? (resolvedPinX as number) + 0.05
+  const resolvedCalloutY = body.callout_y ?? body.callout_y_ratio ?? (resolvedPinY as number) - 0.05
+  const resolvedContractorId =
+    typeof body.contractor_id === 'string' && body.contractor_id.trim() ? body.contractor_id : null
+  const resolvedIssueCategory =
+    typeof body.issue_category === 'string' ? body.issue_category.trim() || null : null
+
+  const tempFolderId = createTempIssueFolderId()
+  let beforePhotoPath: string | null = null
+  let afterPhotoPath: string | null = null
+
+  try {
+    if (beforePhotoFile) {
+      beforePhotoPath = await uploadIssuePhotoFile(
+        client,
+        tenantId,
+        drawing.project_id,
+        drawingId,
+        tempFolderId,
+        'before',
+        beforePhotoFile,
+      )
+      console.log('before photo path:', beforePhotoPath)
+    }
+    if (afterPhotoFile) {
+      afterPhotoPath = await uploadIssuePhotoFile(
+        client,
+        tenantId,
+        drawing.project_id,
+        drawingId,
+        tempFolderId,
+        'after',
+        afterPhotoFile,
+      )
+      console.log('after photo path:', afterPhotoPath)
+    }
+  } catch (error) {
+    console.error('photo upload error:', error)
+    return NextResponse.json({ error: '写真のアップロードに失敗しました' }, { status: 400 })
+  }
 
   const insertBase = {
     tenant_id: tenantId,
@@ -154,7 +202,9 @@ export async function POST(request: NextRequest, { params }: Params) {
     issue_type: issueType,
     issue_text: issueText,
     contractor_id: resolvedContractorId,
-    status: body.status ?? '未対応',
+    status: typeof body.status === 'string' ? body.status : '未対応',
+    before_photo_path: beforePhotoPath,
+    after_photo_path: afterPhotoPath,
     created_by: user.id,
   }
 
@@ -172,10 +222,14 @@ export async function POST(request: NextRequest, { params }: Params) {
   data = firstTry.data as Record<string, unknown> | null
   error = firstTry.error
 
-  if (error && /issue_category/i.test(error.message)) {
+  if (error && /issue_category|before_photo_path|after_photo_path/i.test(error.message)) {
+    const fallbackPayload = { ...insertBase, issue_category: resolvedIssueCategory }
+    delete (fallbackPayload as Record<string, unknown>).before_photo_path
+    delete (fallbackPayload as Record<string, unknown>).after_photo_path
+
     const fallbackTry = await client
       .from('issues')
-      .insert(insertBase)
+      .insert(fallbackPayload)
       .select('*, contractor:contractors(id,name)')
       .single()
     data = fallbackTry.data as Record<string, unknown> | null
@@ -186,5 +240,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     console.error('create issue error:', error)
     return NextResponse.json({ error: error.message, details: error }, { status: 400 })
   }
-  return NextResponse.json({ issue: data })
+
+  const issueWithUrls = data ? await attachIssuePhotoSignedUrls(client, data) : null
+  return NextResponse.json({ issue: issueWithUrls })
 }
