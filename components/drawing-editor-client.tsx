@@ -28,9 +28,12 @@ import {
   captureElement,
   downloadPdfBlob,
   splitIssuesForPdfExport,
+  waitForElementImages,
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
+import { createPhotoSignedUrlsForExport, mergePhotoSignedUrls } from '@/lib/issue-photos-client'
 import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
+import { PdfExportPhotoDetailPage } from '@/components/pdf-export-photo-detail'
 import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel } from '@/components/issue-list-panel'
@@ -148,6 +151,10 @@ export default function DrawingEditorClient() {
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const drawingExportRef = useRef<HTMLDivElement | null>(null)
+  const photoDetailExportRef = useRef<HTMLDivElement | null>(null)
+  const [photoExportIssues, setPhotoExportIssues] = useState<
+    ReturnType<typeof mergePhotoSignedUrls>
+  >([])
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
   const zoomSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -420,19 +427,19 @@ export default function DrawingEditorClient() {
       }
 
       const {
-        selectedIssues,
         commonIssues,
         drawingIssues,
+        photoDetailIssues,
         separateCommonPage,
         selectedContractor,
         exportContractorLabel,
       } = pdfExportSplit
 
-      console.log('pdf export condition:', exportCondition)
-      console.log('selected contractor:', selectedContractor)
-      console.log('selected issues:', selectedIssues)
-      console.log('common issues:', commonIssues)
+      console.log('pdf selected contractor:', selectedContractor)
+      console.log('pdf selected issues:', pdfExportSplit.selectedIssues)
+      console.log('pdf common issues:', commonIssues)
       console.log('pdf drawing issues:', drawingIssues)
+      console.log('pdf photo detail issues:', photoDetailIssues)
 
       const selectedTableTarget = selectedTableExportRef.current
       if (!selectedTableTarget) {
@@ -470,11 +477,34 @@ export default function DrawingEditorClient() {
         drawingImageData = await captureElement(drawingTarget)
       }
 
+      let photoDetailImages: string[] = []
+      if (photoDetailIssues.length > 0) {
+        const photoSignedUrls = await createPhotoSignedUrlsForExport(photoDetailIssues)
+        console.log('photo signed urls:', photoSignedUrls)
+        const mergedPhotoIssues = mergePhotoSignedUrls(photoDetailIssues, photoSignedUrls)
+        setPhotoExportIssues(mergedPhotoIssues)
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        })
+
+        const photoDetailTarget = photoDetailExportRef.current
+        if (photoDetailTarget) {
+          const pageElements = photoDetailTarget.querySelectorAll('[data-photo-export-page]')
+          for (const pageElement of pageElements) {
+            await waitForElementImages(pageElement as HTMLElement)
+            photoDetailImages.push(await captureElement(pageElement as HTMLElement))
+          }
+        }
+      }
+
       const { blob, filename } = await buildInspectionReportPdf({
         selectedTableImage,
         commonTableImage,
         drawingImageData,
+        photoDetailImages,
+        includeLists: true,
         includeDrawing: exportContentType === 'drawing_and_list',
+        includePhotoDetail: photoDetailImages.length > 0,
         hasCommonPage: separateCommonPage && commonIssues.length > 0,
       })
 
@@ -486,6 +516,7 @@ export default function DrawingEditorClient() {
       setExportError('PDF出力に失敗しました')
       toast.error('PDF出力に失敗しました')
     } finally {
+      setPhotoExportIssues([])
       setIsExporting(false)
     }
   }, [
@@ -1255,6 +1286,15 @@ export default function DrawingEditorClient() {
               badgeVariant="common"
               issues={pdfExportSplit.commonIssues}
             />
+          </div>
+        ) : null}
+        {photoExportIssues.length > 0 ? (
+          <div ref={photoDetailExportRef}>
+            {photoExportIssues.map((issue) => (
+              <div key={issue.id} data-photo-export-page>
+                <PdfExportPhotoDetailPage issue={issue} />
+              </div>
+            ))}
           </div>
         ) : null}
       </div>

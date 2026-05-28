@@ -1,8 +1,7 @@
 'use client'
 
-import type { Issue } from '@/lib/domain'
-
-export type NumberedIssue = Issue & { no: number }
+import type { ExportIssue } from '@/lib/pdf-export-client'
+import { issueStatusLabel } from '@/lib/pdf-export-client'
 
 export type PdfExportIssueTableProps = {
   title: string
@@ -12,41 +11,19 @@ export type PdfExportIssueTableProps = {
   exportDate: string
   badgeLabel: string
   badgeVariant?: 'contractor' | 'common' | 'unassigned' | 'all'
-  issues: NumberedIssue[]
+  issues: ExportIssue[]
 }
 
-function issueContractorName(issue: NumberedIssue): string {
+function issueContractorName(issue: ExportIssue): string {
   if (issue.issue_category === 'common') return '共通'
   return issue.contractor?.name ?? '業者未定'
 }
 
-function issueStatusDisplay(status: string): { label: string; className: string; dotClassName: string } {
-  if (status === '完了' || status === 'done') {
-    return {
-      label: '完了',
-      className: 'text-green-700',
-      dotClassName: 'bg-green-500',
-    }
-  }
-  if (status === '対応中') {
-    return {
-      label: '対応中',
-      className: 'text-amber-700',
-      dotClassName: 'bg-amber-500',
-    }
-  }
-  return {
-    label: '未対応',
-    className: 'text-red-700',
-    dotClassName: 'bg-red-500',
-  }
-}
-
-function countStats(issues: NumberedIssue[]) {
+function countStats(issues: ExportIssue[]) {
   let open = 0
   let done = 0
   for (const issue of issues) {
-    if (issue.status === '完了' || issue.status === 'done') {
+    if (issueStatusLabel(issue.status) === '完了') {
       done += 1
     } else {
       open += 1
@@ -103,7 +80,7 @@ export function PdfExportIssueTable({
           <thead>
             <tr className="bg-slate-100 text-left text-slate-700">
               <th className="border border-slate-200 px-3 py-2.5 font-semibold" style={{ width: 48 }}>
-                No.
+                No
               </th>
               <th className="border border-slate-200 px-3 py-2.5 font-semibold" style={{ width: 56 }}>
                 階
@@ -129,10 +106,16 @@ export function PdfExportIssueTable({
               </tr>
             ) : (
               issues.map((issue) => {
-                const status = issueStatusDisplay(issue.status)
+                const status = issueStatusLabel(issue.status)
+                const statusClass =
+                  status === '完了'
+                    ? { className: 'text-green-700', dotClassName: 'bg-green-500' }
+                    : { className: 'text-red-700', dotClassName: 'bg-red-500' }
                 return (
                   <tr key={issue.id} className="text-slate-800">
-                    <td className="border border-slate-200 px-3 py-2 text-center font-medium">{issue.no}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-center font-medium">
+                      {issue.exportNo}
+                    </td>
                     <td className="border border-slate-200 px-3 py-2">{issue.floor_label}</td>
                     <td className="border border-slate-200 px-3 py-2">{issue.issue_type}</td>
                     <td className="border border-slate-200 px-3 py-2 leading-relaxed">
@@ -140,9 +123,9 @@ export function PdfExportIssueTable({
                     </td>
                     <td className="border border-slate-200 px-3 py-2">{issueContractorName(issue)}</td>
                     <td className="border border-slate-200 px-3 py-2">
-                      <span className={`inline-flex items-center gap-1.5 font-medium ${status.className}`}>
-                        <span className={`inline-block h-2.5 w-2.5 rounded-full ${status.dotClassName}`} />
-                        {status.label}
+                      <span className={`inline-flex items-center gap-1.5 font-medium ${statusClass.className}`}>
+                        <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusClass.dotClassName}`} />
+                        {status}
                       </span>
                     </td>
                   </tr>
@@ -154,13 +137,13 @@ export function PdfExportIssueTable({
 
         <div className="mt-5 flex gap-6 border-t border-slate-200 pt-4 text-sm text-slate-700">
           <span>
-            合計：<strong>{stats.total}</strong>件
+            合計件数：<strong>{stats.total}</strong>件
           </span>
           <span>
-            未対応：<strong>{stats.open}</strong>件
+            未対応件数：<strong>{stats.open}</strong>件
           </span>
           <span>
-            対応済：<strong>{stats.done}</strong>件
+            完了件数：<strong>{stats.done}</strong>件
           </span>
         </div>
       </div>

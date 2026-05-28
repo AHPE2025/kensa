@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf'
 import type { Contractor, Issue } from '@/lib/domain'
 
 export type PdfExportCondition = {
-  exportTarget: 'all' | 'unassigned' | 'contractor'
+  exportTarget: 'all' | 'unassigned' | 'contractor' | 'common'
   exportContractorId: string
   exportContentType: 'list' | 'drawing_and_list'
 }
@@ -18,13 +18,27 @@ export type PdfExportMeta = {
 
 export type NumberedIssue = Issue & { no: number }
 
+export type ExportIssue = Issue & { exportNo: number; no: number }
+
 export type PdfExportSplit = {
-  selectedIssues: NumberedIssue[]
-  commonIssues: NumberedIssue[]
-  drawingIssues: NumberedIssue[]
+  selectedIssues: ExportIssue[]
+  commonIssues: ExportIssue[]
+  drawingIssues: ExportIssue[]
+  photoDetailIssues: ExportIssue[]
+  excludedIssues: NumberedIssue[]
   separateCommonPage: boolean
   selectedContractor: Contractor | null
   exportContractorLabel: string
+}
+
+export type PhotoSignedUrlEntry = {
+  issueId: string
+  before_photo_path: string | null
+  after_photo_path: string | null
+  before_photo_url: string | null
+  after_photo_url: string | null
+  beforeError: boolean
+  afterError: boolean
 }
 
 function formatExportTimestamp(date: Date): string {
@@ -42,42 +56,73 @@ export function isUnassignedIssue(issue: Issue): boolean {
   return issue.contractor_id === null && !isCommonIssue(issue)
 }
 
+export function issueStatusLabel(status: string): '未対応' | '完了' {
+  if (status === '完了' || status === 'done') return '完了'
+  return '未対応'
+}
+
+function assignExportNumbers(issues: Issue[]): ExportIssue[] {
+  return issues.map((issue, index) => {
+    const exportNo = index + 1
+    return { ...issue, exportNo, no: exportNo }
+  })
+}
+
 export function splitIssuesForPdfExport(
   issues: NumberedIssue[],
   condition: PdfExportCondition,
   contractors: Contractor[],
 ): PdfExportSplit {
-  const commonIssues = issues.filter(isCommonIssue)
-  let selectedIssues: NumberedIssue[]
+  const commonIssuesRaw = issues.filter(isCommonIssue)
+  let selectedIssuesRaw: NumberedIssue[] = []
   let exportContractorLabel: string
   let selectedContractor: Contractor | null = null
   let separateCommonPage = false
+  let commonIssuesForPage: NumberedIssue[] = []
 
-  if (condition.exportTarget === 'unassigned') {
-    selectedIssues = issues.filter(isUnassignedIssue)
+  if (condition.exportTarget === 'common') {
+    selectedIssuesRaw = commonIssuesRaw
+    commonIssuesForPage = []
+    exportContractorLabel = '共通'
+    separateCommonPage = false
+  } else if (condition.exportTarget === 'unassigned') {
+    selectedIssuesRaw = issues.filter(isUnassignedIssue)
+    commonIssuesForPage = commonIssuesRaw
     exportContractorLabel = '業者未定'
-    separateCommonPage = commonIssues.length > 0
+    separateCommonPage = commonIssuesForPage.length > 0
   } else if (condition.exportTarget === 'contractor' && condition.exportContractorId !== 'all') {
     selectedContractor = contractors.find((item) => item.id === condition.exportContractorId) ?? null
     exportContractorLabel = selectedContractor?.name ?? '担当業者'
-    selectedIssues = issues.filter(
+    selectedIssuesRaw = issues.filter(
       (issue) => !isCommonIssue(issue) && issue.contractor_id === condition.exportContractorId,
     )
-    separateCommonPage = commonIssues.length > 0
+    commonIssuesForPage = commonIssuesRaw
+    separateCommonPage = commonIssuesForPage.length > 0
   } else {
-    selectedIssues = issues
+    selectedIssuesRaw = issues.filter((issue) => !isCommonIssue(issue))
+    commonIssuesForPage = commonIssuesRaw
     exportContractorLabel = '全業者'
-    separateCommonPage = false
+    separateCommonPage = commonIssuesForPage.length > 0
   }
 
-  const drawingIssues = separateCommonPage
-    ? [...selectedIssues, ...commonIssues]
-    : selectedIssues
+  const drawingIssues = assignExportNumbers([...selectedIssuesRaw, ...commonIssuesForPage])
+  const selectedIdSet = new Set(selectedIssuesRaw.map((issue) => issue.id))
+  const commonIdSet = new Set(commonIssuesForPage.map((issue) => issue.id))
+
+  const selectedIssues = drawingIssues.filter((issue) => selectedIdSet.has(issue.id))
+  const commonIssues = drawingIssues.filter((issue) => commonIdSet.has(issue.id))
+  const photoDetailIssues = drawingIssues.filter(
+    (issue) => issue.before_photo_path || issue.after_photo_path,
+  )
+  const includedIds = new Set(drawingIssues.map((issue) => issue.id))
+  const excludedIssues = issues.filter((issue) => !includedIds.has(issue.id))
 
   return {
     selectedIssues,
     commonIssues,
     drawingIssues,
+    photoDetailIssues,
+    excludedIssues,
     separateCommonPage,
     selectedContractor,
     exportContractorLabel,
@@ -90,6 +135,29 @@ export function filterIssuesForExport(
   condition: PdfExportCondition,
 ): NumberedIssue[] {
   return splitIssuesForPdfExport(issues, condition, []).drawingIssues
+}
+
+export async function waitForElementImages(element: HTMLElement, timeoutMs = 15000): Promise<void> {
+  const images = Array.from(element.querySelectorAll('img'))
+  await Promise.all(
+    images.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete && img.naturalHeight > 0) {
+            resolve()
+            return
+          }
+          const onDone = () => {
+            img.removeEventListener('load', onDone)
+            img.removeEventListener('error', onDone)
+            resolve()
+          }
+          img.addEventListener('load', onDone)
+          img.addEventListener('error', onDone)
+          setTimeout(onDone, timeoutMs)
+        }),
+    ),
+  )
 }
 
 export async function captureElement(element: HTMLElement): Promise<string> {
@@ -118,10 +186,14 @@ export async function captureElement(element: HTMLElement): Promise<string> {
 /** @deprecated Use captureElement */
 export const captureDrawingElement = captureElement
 
-function addImageFitPage(pdf: jsPDF, imageData: string): Promise<void> {
+function addImageFitPage(
+  pdf: jsPDF,
+  imageData: string,
+  orientation: 'landscape' | 'portrait',
+): Promise<void> {
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
-  const margin = 8
+  const margin = orientation === 'portrait' ? 10 : 8
   const maxWidth = pageWidth - margin * 2
   const maxHeight = pageHeight - margin * 2
 
@@ -141,18 +213,26 @@ function addImageFitPage(pdf: jsPDF, imageData: string): Promise<void> {
   })
 }
 
-async function addCapturedPage(pdf: jsPDF, imageData: string, isFirstPage: boolean) {
+async function addCapturedPage(
+  pdf: jsPDF,
+  imageData: string,
+  isFirstPage: boolean,
+  orientation: 'landscape' | 'portrait',
+) {
   if (!isFirstPage) {
-    pdf.addPage('a4', 'landscape')
+    pdf.addPage('a4', orientation)
   }
-  await addImageFitPage(pdf, imageData)
+  await addImageFitPage(pdf, imageData, orientation)
 }
 
 export async function buildInspectionReportPdf(options: {
   selectedTableImage?: string | null
   commonTableImage?: string | null
   drawingImageData?: string | null
+  photoDetailImages?: string[]
+  includeLists: boolean
   includeDrawing: boolean
+  includePhotoDetail: boolean
   hasCommonPage: boolean
 }): Promise<{ blob: Blob; filename: string }> {
   const pdf = new jsPDF({
@@ -163,21 +243,29 @@ export async function buildInspectionReportPdf(options: {
 
   let pageCount = 0
 
-  if (options.selectedTableImage) {
-    await addCapturedPage(pdf, options.selectedTableImage, pageCount === 0)
+  if (options.includeLists && options.selectedTableImage) {
+    await addCapturedPage(pdf, options.selectedTableImage, pageCount === 0, 'landscape')
     pageCount += 1
   }
 
-  if (options.hasCommonPage && options.commonTableImage) {
-    await addCapturedPage(pdf, options.commonTableImage, pageCount === 0)
+  if (options.includeLists && options.hasCommonPage && options.commonTableImage) {
+    await addCapturedPage(pdf, options.commonTableImage, pageCount === 0, 'landscape')
     pageCount += 1
   }
 
   if (options.includeDrawing && options.drawingImageData) {
-    await addCapturedPage(pdf, options.drawingImageData, pageCount === 0)
+    await addCapturedPage(pdf, options.drawingImageData, pageCount === 0, 'landscape')
+    pageCount += 1
   }
 
-  const filename = `inspection_report_${formatExportTimestamp(new Date())}.pdf`
+  if (options.includePhotoDetail && options.photoDetailImages) {
+    for (const imageData of options.photoDetailImages) {
+      await addCapturedPage(pdf, imageData, pageCount === 0, 'portrait')
+      pageCount += 1
+    }
+  }
+
+  const filename = `inspection_photo_report_${formatExportTimestamp(new Date())}.pdf`
   return { blob: pdf.output('blob'), filename }
 }
 

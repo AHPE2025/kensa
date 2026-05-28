@@ -16,6 +16,7 @@ type IssuePinsStageProps = {
   mode: 'view' | 'add' | 'edit'
   selectedIssueId: string | null
   isExporting: boolean
+  pdfExportMode?: boolean
   visibleContractorIds: Set<string>
   getIssueContractorId: (issue: Issue) => string
   onStageClick: (event: {
@@ -38,6 +39,7 @@ function IssuePinsStageComponent({
   mode,
   selectedIssueId,
   isExporting,
+  pdfExportMode = false,
   visibleContractorIds,
   getIssueContractorId,
   onStageClick,
@@ -130,6 +132,7 @@ function IssuePinsStageComponent({
               stageHeight={stageHeight}
               isSelected={selectedIssueId === issue.id}
               canDrag={mode === 'edit'}
+              pdfExportMode={pdfExportMode || isExporting}
               dragOverride={draggingPositions[issue.id] ?? null}
               onDragMove={handleDragMove}
               onSelect={onSelect}

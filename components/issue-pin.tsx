@@ -20,6 +20,7 @@ type IssuePinProps = {
   stageHeight: number
   isSelected: boolean
   canDrag: boolean
+  pdfExportMode?: boolean
   dragOverride?: DragOverride | null
   onSelect: (issue: NumberedIssue) => void
   onEdit: (issue: NumberedIssue) => void
@@ -267,6 +268,7 @@ function IssuePinComponent({
   stageHeight,
   isSelected,
   canDrag,
+  pdfExportMode = false,
   dragOverride,
   onSelect,
   onEdit,
@@ -290,21 +292,27 @@ function IssuePinComponent({
   const calloutBg = isSelected ? '#eff6ff' : isDone ? '#f0fdf4' : isInProgress ? '#fffbeb' : '#eff6ff'
   const calloutStroke = isSelected ? '#2563eb' : pinColor
   const calloutStrokeWidth = isSelected ? 2.5 : 1
-  const contractorLabel = issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
-  const photoLines = [
-    issue.before_photo_path || issue.before_photo_url ? 'ビフォー写真あり' : '',
-    issue.after_photo_path || issue.after_photo_url ? 'アフター写真あり' : '',
-  ]
-    .filter(Boolean)
-    .join('\n')
-  const calloutText = [
-    `#${issue.no} ${issue.issue_type}`,
-    issue.issue_text?.trim() ? issue.issue_text.slice(0, 30) : '未入力',
-    contractorLabel,
-    photoLines,
-  ]
-    .filter(Boolean)
-    .join('\n')
+  const shortText = issue.issue_text?.trim() ? issue.issue_text.slice(0, 24) : '未入力'
+  const calloutText = pdfExportMode
+    ? [`#${issue.no} ${issue.issue_type}`, shortText].filter(Boolean).join('\n')
+    : (() => {
+        const contractorLabel =
+          issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
+        const photoLines = [
+          issue.before_photo_path || issue.before_photo_url ? 'ビフォー写真あり' : '',
+          issue.after_photo_path || issue.after_photo_url ? 'アフター写真あり' : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+        return [
+          `#${issue.no} ${issue.issue_type}`,
+          issue.issue_text?.trim() ? issue.issue_text.slice(0, 30) : '未入力',
+          contractorLabel,
+          photoLines,
+        ]
+          .filter(Boolean)
+          .join('\n')
+      })()
 
   const setDragCursor = useCallback(
     (grabbing: boolean) => {
