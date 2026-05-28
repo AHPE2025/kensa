@@ -62,6 +62,8 @@ export function sortDrawingsByFloorLabel<T extends { floor_label: string }>(draw
 
 export type IssueType = (typeof ISSUE_TYPES)[number]
 
+export type IssueStatus = '未対応' | '完了'
+
 export type Profile = {
   id: string
   tenant_id: string
@@ -120,7 +122,7 @@ export type IssueFormValues = {
   issue_text: string
   contractor_id: string
   issue_category: string
-  status: string
+  status: IssueStatus
   beforePhotoFile: File | null
   afterPhotoFile: File | null
   clearBeforePhoto: boolean
@@ -142,7 +144,7 @@ export type Issue = {
   issue_type: IssueType
   issue_text: string | null
   contractor_id: string | null
-  status: string
+  status: IssueStatus
   before_photo_path?: string | null
   after_photo_path?: string | null
   before_photo_url?: string | null

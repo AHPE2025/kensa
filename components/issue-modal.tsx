@@ -26,6 +26,7 @@ import {
   findActiveMappingForIssueType,
 } from '@/lib/issue-type-mapping'
 import type { Contractor, IssueFormValues, IssueTypeContractorMapping } from '@/lib/domain'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 import { Search, X } from 'lucide-react'
 
 const CUSTOM_ISSUE_TYPE_VALUE = '__custom__'
@@ -142,10 +143,14 @@ export function IssueModal({
   useEffect(() => {
     if (!open) return
     const preset = issueTypeOptions.includes(defaultValues.issue_type)
+    const normalizedDefaults = {
+      ...defaultValues,
+      status: normalizeIssueStatus(defaultValues.status),
+    }
     setForm(
       preset
-        ? defaultValues
-        : { ...defaultValues, issue_type: CUSTOM_ISSUE_TYPE_VALUE },
+        ? normalizedDefaults
+        : { ...normalizedDefaults, issue_type: CUSTOM_ISSUE_TYPE_VALUE },
     )
     setCustomIssueType(preset ? '' : defaultValues.issue_type)
     setContractorSearch('')
@@ -219,9 +224,12 @@ export function IssueModal({
 
   const buildFormValues = (): IssueFormValues => {
     const resolvedIssueType = isCustomIssueType ? customIssueType.trim() : form.issue_type
+    const normalizedStatus = normalizeIssueStatus(form.status)
+    console.log('normalized issue status:', normalizedStatus)
     return {
       ...form,
       issue_type: resolvedIssueType || form.issue_type,
+      status: normalizedStatus,
       beforePhotoFile,
       afterPhotoFile,
       clearBeforePhoto,
@@ -353,15 +361,18 @@ export function IssueModal({
           <div className="flex flex-col gap-2">
             <Label className="font-medium">状態</Label>
             <Select
-              value={form.status}
-              onValueChange={(value) => setForm((prev) => ({ ...prev, status: value }))}
+              value={normalizeIssueStatus(form.status)}
+              onValueChange={(value) => {
+                const normalized = normalizeIssueStatus(value)
+                console.log('issue status selected:', normalized)
+                setForm((prev) => ({ ...prev, status: normalized }))
+              }}
             >
               <SelectTrigger className="h-11">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="未対応">未対応</SelectItem>
-                <SelectItem value="対応中">対応中</SelectItem>
                 <SelectItem value="完了">完了</SelectItem>
               </SelectContent>
             </Select>

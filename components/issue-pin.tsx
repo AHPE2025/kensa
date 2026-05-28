@@ -4,6 +4,7 @@ import { memo, useCallback, useState } from 'react'
 import { Circle, Group, Label, Line, Tag, Text as KonvaText } from 'react-konva'
 import type Konva from 'konva'
 import type { Issue } from '@/lib/domain'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 
 type NumberedIssue = Issue & { no: number }
 
@@ -285,11 +286,10 @@ function IssuePinComponent({
   const displayCalloutX = (dragOverride?.callout_x ?? issue.callout_x) * stageWidth
   const displayCalloutY = (dragOverride?.callout_y ?? issue.callout_y) * stageHeight
 
-  const isDone = issue.status === '完了' || issue.status === 'done'
-  const isInProgress = issue.status === '対応中'
-  const basePinColor = isDone ? '#16a34a' : isInProgress ? '#d97706' : '#2563eb'
+  const isDone = normalizeIssueStatus(issue.status) === '完了'
+  const basePinColor = isDone ? '#16a34a' : '#ea580c'
   const pinColor = isSelected ? '#dc2626' : basePinColor
-  const calloutBg = isSelected ? '#eff6ff' : isDone ? '#f0fdf4' : isInProgress ? '#fffbeb' : '#eff6ff'
+  const calloutBg = isSelected ? '#eff6ff' : isDone ? '#f0fdf4' : '#fff7ed'
   const calloutStroke = isSelected ? '#2563eb' : pinColor
   const calloutStrokeWidth = isSelected ? 2.5 : 1
   const shortText = issue.issue_text?.trim() ? issue.issue_text.slice(0, 24) : '未入力'

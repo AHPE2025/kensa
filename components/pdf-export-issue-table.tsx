@@ -1,7 +1,7 @@
 'use client'
 
 import type { ExportIssue } from '@/lib/pdf-export-client'
-import { issueStatusLabel } from '@/lib/pdf-export-client'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 
 export type PdfExportIssueTableProps = {
   title: string
@@ -23,7 +23,7 @@ function countStats(issues: ExportIssue[]) {
   let open = 0
   let done = 0
   for (const issue of issues) {
-    if (issueStatusLabel(issue.status) === '完了') {
+    if (normalizeIssueStatus(issue.status) === '完了') {
       done += 1
     } else {
       open += 1
@@ -106,7 +106,7 @@ export function PdfExportIssueTable({
               </tr>
             ) : (
               issues.map((issue) => {
-                const status = issueStatusLabel(issue.status)
+                const status = normalizeIssueStatus(issue.status)
                 const statusClass =
                   status === '完了'
                     ? { className: 'text-green-700', dotClassName: 'bg-green-500' }

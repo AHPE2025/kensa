@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 
 export async function GET(request: NextRequest) {
   const authed = await getAuthedClient(request)
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
     const current = map.get(issue.project_id)
     if (!current) continue
     current.issue_count += 1
-    if (issue.status !== 'done') current.open_count += 1
+    if (normalizeIssueStatus(issue.status) !== '完了') current.open_count += 1
     if (issue.created_at > current.latest_update) current.latest_update = issue.created_at
   }
 

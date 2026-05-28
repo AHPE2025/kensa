@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
 import { attachIssuePhotoSignedUrls } from '@/lib/issue-photos'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 
 type Params = { params: Promise<{ issueId: string }> }
 
@@ -69,6 +70,11 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if ('y_ratio' in body) updates.pin_y = body.y_ratio
   if ('callout_x_ratio' in body) updates.callout_x = body.callout_x_ratio
   if ('callout_y_ratio' in body) updates.callout_y = body.callout_y_ratio
+  if ('status' in updates) {
+    updates.status = normalizeIssueStatus(
+      typeof updates.status === 'string' ? updates.status : undefined,
+    )
+  }
 
   updates.updated_by = user?.id ?? null
   updates.updated_at = new Date().toISOString()

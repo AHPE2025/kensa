@@ -13,16 +13,20 @@ import {
 } from '@/components/ui/select'
 import type { Contractor, Issue } from '@/lib/domain'
 import { ISSUE_TYPES } from '@/lib/domain'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 import { Button } from '@/components/ui/button'
 import { Pencil } from 'lucide-react'
 
 type NumberedIssue = Issue & { no: number }
+
+export type IssueStatusFilter = 'all' | 'pending' | 'completed'
 
 type IssueListFilter = {
   searchText: string
   contractorId: string
   issueType: string
   floorLabel: string
+  statusFilter: IssueStatusFilter
 }
 
 type IssueListPanelProps = {
@@ -60,7 +64,7 @@ export function IssueListPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 border-b border-border p-3">
+      <div className="grid grid-cols-2 gap-2 border-b border-border p-3 sm:grid-cols-4">
         <Select
           value={filters.contractorId}
           onValueChange={(value) => onFilterChange({ contractorId: value })}
@@ -110,6 +114,21 @@ export function IssueListPanel({
             ))}
           </SelectContent>
         </Select>
+        <Select
+          value={filters.statusFilter}
+          onValueChange={(value) =>
+            onFilterChange({ statusFilter: value as IssueStatusFilter })
+          }
+        >
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="状態" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全件表示</SelectItem>
+            <SelectItem value="pending">未対応のみ</SelectItem>
+            <SelectItem value="completed">完了のみ</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -124,8 +143,8 @@ export function IssueListPanel({
               issue.issue_category === 'common'
                 ? '共通指摘'
                 : issue.contractor?.name ?? contractors.find((c) => c.id === issue.contractor_id)?.name ?? '業者未定'
-            const isDone = issue.status === '完了' || issue.status === 'done'
-            const isInProgress = issue.status === '対応中'
+            const status = normalizeIssueStatus(issue.status)
+            const isDone = status === '完了'
             return (
               <button
                 key={issue.id}
@@ -151,12 +170,11 @@ export function IssueListPanel({
                     <Badge variant="default" className="ml-auto bg-green-600 px-1.5 py-0 text-[10px] text-white">
                       完了
                     </Badge>
-                  ) : isInProgress ? (
-                    <Badge variant="secondary" className="ml-auto bg-amber-100 px-1.5 py-0 text-[10px] text-amber-700">
-                      対応中
-                    </Badge>
                   ) : (
-                    <Badge variant="outline" className="ml-auto px-1.5 py-0 text-[10px]">
+                    <Badge
+                      variant="outline"
+                      className="ml-auto border-orange-300 bg-orange-50 px-1.5 py-0 text-[10px] text-orange-700"
+                    >
                       未対応
                     </Badge>
                   )}

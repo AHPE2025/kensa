@@ -37,6 +37,7 @@ import {
   waitForElementImages,
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { PdfExportPhotoDetailPage, type PhotoDetailIssue } from '@/components/pdf-export-photo-detail'
 import { IssuePinsStage } from '@/components/issue-pins-stage'
@@ -266,6 +267,17 @@ export function PdfExportPage() {
 
   const pinsToRender = exportDrawingPageIssues
 
+  const exportStatusCounts = useMemo(() => {
+    const targetIssues = pdfExportSplit.selectedIssues
+    const pendingCount = targetIssues.filter(
+      (issue) => normalizeIssueStatus(issue.status) === '未対応',
+    ).length
+    const completedCount = targetIssues.filter(
+      (issue) => normalizeIssueStatus(issue.status) === '完了',
+    ).length
+    return { total: targetIssues.length, pending: pendingCount, completed: completedCount }
+  }, [pdfExportSplit.selectedIssues])
+
   const photoDetailIssuesForPreview = useMemo(() => {
     return mergePhotoSignedUrls(
       pdfExportSplit.photoDetailIssues,
@@ -329,6 +341,19 @@ export function PdfExportPage() {
     try {
       setIsExporting(true)
       console.log('pdf export start')
+
+      const targetIssues = pdfExportSplit.selectedIssues
+      const pendingCount = targetIssues.filter(
+        (issue) => normalizeIssueStatus(issue.status) === '未対応',
+      ).length
+      const completedCount = targetIssues.filter(
+        (issue) => normalizeIssueStatus(issue.status) === '完了',
+      ).length
+      console.log('pdf issue status counts:', {
+        total: targetIssues.length,
+        pending: pendingCount,
+        completed: completedCount,
+      })
 
       if (exportTarget === 'contractor' && exportContractorId === 'all') {
         throw new Error('出力する業者を選択してください')
@@ -417,6 +442,7 @@ export function PdfExportPage() {
       console.error('pdf export error:', error)
       toast.error('PDF出力に失敗しました')
     } finally {
+      setPhotoDetailExportData([])
       setIsExporting(false)
     }
   }, [exportContent, exportContractorId, exportTarget, pdfExportSplit])
@@ -588,9 +614,21 @@ export function PdfExportPage() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">指摘件数</span>
+                      <span className="text-muted-foreground">合計件数</span>
                       <span className="font-bold text-foreground">
-                        {pdfExportSplit.selectedIssues.length}件
+                        {exportStatusCounts.total}件
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">未対応件数</span>
+                      <span className="font-medium text-orange-700">
+                        {exportStatusCounts.pending}件
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">完了件数</span>
+                      <span className="font-medium text-green-700">
+                        {exportStatusCounts.completed}件
                       </span>
                     </div>
                     {pdfExportSplit.photoDetailIssues.length > 0 ? (

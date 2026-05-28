@@ -120,7 +120,7 @@ export function buildIssueSavePayload(values: IssueFormValues, base: Record<stri
     issue_text: values.issue_text.trim() || null,
     issue_category: buildIssueSaveCategory(values),
     contractor_id: values.contractor_id || null,
-    status: values.status || '未対応',
+    status: values.status === '完了' ? ('完了' as const) : ('未対応' as const),
   }
   console.log('issue payload with mapping:', payload)
   return payload

@@ -1,7 +1,7 @@
 'use client'
 
 import type { ExportIssue } from '@/lib/pdf-export-client'
-import { issueStatusLabel } from '@/lib/pdf-export-client'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 
 export type PhotoDetailIssue = ExportIssue & {
   before_photo_url?: string | null
@@ -53,7 +53,7 @@ function PhotoSlot({
 }
 
 export function PdfExportPhotoDetailPage({ issue }: { issue: PhotoDetailIssue }) {
-  const status = issueStatusLabel(issue.status)
+  const status = normalizeIssueStatus(issue.status)
   const issueText = issue.issue_text?.trim() ? issue.issue_text : '未入力'
 
   return (

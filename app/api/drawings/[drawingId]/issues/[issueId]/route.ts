@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
 import { attachIssuePhotoSignedUrls } from '@/lib/issue-photos'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 
 type Params = { params: Promise<{ drawingId: string; issueId: string }> }
 
@@ -85,6 +86,11 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   }
   if ('after_photo_path' in updates) {
     updates.after_photo_path = resolveOptionalString(updates.after_photo_path)
+  }
+  if ('status' in updates) {
+    updates.status = normalizeIssueStatus(
+      typeof updates.status === 'string' ? updates.status : undefined,
+    )
   }
 
   updates.updated_by = user?.id ?? null

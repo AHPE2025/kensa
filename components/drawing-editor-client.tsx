@@ -23,6 +23,7 @@ import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type IssueTypeContractorMapping, type Project } from '@/lib/domain'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 import { buildIssueSaveCategory, buildIssueTypeOptions } from '@/lib/issue-type-mapping'
 import {
   buildInspectionReportPdf,
@@ -143,6 +144,7 @@ export default function DrawingEditorClient() {
     contractorId: 'all',
     issueType: 'all',
     floorLabel: 'all',
+    statusFilter: 'all' as const,
   })
   const [exportTarget, setExportTarget] = useState<'all' | 'unassigned' | 'contractor'>('all')
   const [exportContractorId, setExportContractorId] = useState<string>('all')
@@ -332,6 +334,10 @@ export default function DrawingEditorClient() {
     console.log('selected contractor filter:', listFilters.contractorId)
   }, [listFilters.contractorId])
 
+  useEffect(() => {
+    console.log('status filter changed:', listFilters.statusFilter)
+  }, [listFilters.statusFilter])
+
   const numberedIssues = useMemo(() => {
     const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
     return sorted.map((issue, index) => ({ ...issue, no: index + 1 }))
@@ -353,6 +359,8 @@ export default function DrawingEditorClient() {
       }
       if (listFilters.issueType !== 'all' && issue.issue_type !== listFilters.issueType) return false
       if (listFilters.floorLabel !== 'all' && issue.floor_label !== listFilters.floorLabel) return false
+      if (listFilters.statusFilter === 'pending' && normalizeIssueStatus(issue.status) !== '未対応') return false
+      if (listFilters.statusFilter === 'completed' && normalizeIssueStatus(issue.status) !== '完了') return false
       if (!key) return true
       const contractorName =
         issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
@@ -471,6 +479,19 @@ export default function DrawingEditorClient() {
       }
 
       console.log('pdf export start')
+
+      const targetIssues = pdfExportSplit.selectedIssues
+      const pendingCount = targetIssues.filter(
+        (issue) => normalizeIssueStatus(issue.status) === '未対応',
+      ).length
+      const completedCount = targetIssues.filter(
+        (issue) => normalizeIssueStatus(issue.status) === '完了',
+      ).length
+      console.log('pdf issue status counts:', {
+        total: targetIssues.length,
+        pending: pendingCount,
+        completed: completedCount,
+      })
 
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
@@ -617,10 +638,11 @@ export default function DrawingEditorClient() {
           pin_y: addingPin.y,
           callout_x: Math.min(1, Math.max(0, addingPin.x + 0.05)),
           callout_y: Math.min(1, Math.max(0, addingPin.y - 0.05)),
-          status: values.status || '未対応',
+          status: normalizeIssueStatus(values.status || '未対応'),
           before_photo_path: beforePhotoPath,
           after_photo_path: afterPhotoPath,
         }
+        console.log('normalized issue status:', payload.status)
         console.log('issue payload with mapping:', payload)
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
         console.log('auto floor_label:', currentDrawing?.floor_label)
@@ -714,8 +736,9 @@ export default function DrawingEditorClient() {
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id
               : null,
-          status: values.status || '未対応',
+          status: normalizeIssueStatus(values.status || '未対応'),
         }
+        console.log('normalized issue status:', payload.status)
 
         if (beforePhotoFile || values.clearBeforePhoto) {
           payload.before_photo_path = beforePhotoPath
@@ -750,7 +773,7 @@ export default function DrawingEditorClient() {
         setIssueModalOpen(false)
         toast.success('指摘を更新しました')
       } catch (error) {
-        console.error('create issue error:', error)
+        console.error('issue status update error:', error)
         toast.error('更新に失敗しました')
       }
     },
@@ -1258,7 +1281,7 @@ export default function DrawingEditorClient() {
           issue_text: editingIssue?.issue_text ?? '',
           contractor_id: editingIssue?.contractor_id ?? '',
           issue_category: editingIssue?.issue_category ?? '',
-          status: editingIssue?.status === 'done' ? '完了' : editingIssue?.status ?? '未対応',
+          status: normalizeIssueStatus(editingIssue?.status ?? '未対応'),
         }}
         defaultBeforePhotoUrl={editingIssue?.before_photo_url ?? null}
         defaultAfterPhotoUrl={editingIssue?.after_photo_url ?? null}

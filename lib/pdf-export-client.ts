@@ -56,10 +56,7 @@ export function isUnassignedIssue(issue: Issue): boolean {
   return issue.contractor_id === null && !isCommonIssue(issue)
 }
 
-export function issueStatusLabel(status: string): '未対応' | '完了' {
-  if (status === '完了' || status === 'done') return '完了'
-  return '未対応'
-}
+export { issueStatusLabel, normalizeIssueStatus, type IssueStatus } from '@/lib/issue-status'
 
 function assignExportNumbers(issues: Issue[]): ExportIssue[] {
   return issues.map((issue, index) => {

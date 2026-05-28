@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
 import { attachIssuePhotoSignedUrls } from '@/lib/issue-photos'
+import { normalizeIssueStatus } from '@/lib/issue-status'
 import { DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
 
 type Params = { params: Promise<{ drawingId: string }> }
@@ -196,7 +197,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     issue_type: resolvedIssueType,
     issue_text: resolvedIssueText,
     contractor_id: resolvedContractorId,
-    status: typeof body.status === 'string' ? body.status : '未対応',
+    status: normalizeIssueStatus(typeof body.status === 'string' ? body.status : undefined),
     before_photo_path: beforePhotoPath,
     after_photo_path: afterPhotoPath,
     issue_category: resolvedIssueCategory,
