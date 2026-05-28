@@ -38,7 +38,7 @@ import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { PdfExportPhotoDetailPage } from '@/components/pdf-export-photo-detail'
 import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
-import { IssueListPanel } from '@/components/issue-list-panel'
+import { IssueListPanel, type IssueStatusFilter } from '@/components/issue-list-panel'
 import { ContractorFilter } from '@/components/contractor-filter'
 import { IssuePinsStage } from '@/components/issue-pins-stage'
 import { IssueModal } from '@/components/issue-modal'
@@ -144,7 +144,7 @@ export default function DrawingEditorClient() {
     contractorId: 'all',
     issueType: 'all',
     floorLabel: 'all',
-    statusFilter: 'all' as const,
+    statusFilter: 'all' as IssueStatusFilter,
   })
   const [exportTarget, setExportTarget] = useState<'all' | 'unassigned' | 'contractor'>('all')
   const [exportContractorId, setExportContractorId] = useState<string>('all')
