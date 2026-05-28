@@ -18,8 +18,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { authedFetch } from '@/lib/authed-fetch'
-import { createTempIssueFolderId } from '@/lib/issue-photo-paths'
+import { createTempIssueFolderId, resolvePhotoUploadTenantId } from '@/lib/issue-photo-paths'
 import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type IssueTypeContractorMapping, type Project } from '@/lib/domain'
@@ -151,6 +152,7 @@ export default function DrawingEditorClient() {
   const [exportContentType, setExportContentType] = useState<'list' | 'drawing_and_list'>('drawing_and_list')
   const [isExporting, setIsExporting] = useState(false)
   const [project, setProject] = useState<Project | null>(null)
+  const [profileTenantId, setProfileTenantId] = useState<string | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
 
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -180,6 +182,16 @@ export default function DrawingEditorClient() {
 
   const loadData = async () => {
     try {
+      if (user) {
+        const supabase = getSupabaseBrowserClient()
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('tenant_id')
+          .eq('id', user.id)
+          .maybeSingle()
+        setProfileTenantId(profile?.tenant_id ?? null)
+      }
+
       const [drawingListRes, contractorRes, issueRes, projectRes, mappingRes] = await Promise.all([
         authedFetch(`/api/projects/${projectId}/drawings`),
         authedFetch(`/api/projects/${projectId}/contractors`),
@@ -579,6 +591,80 @@ export default function DrawingEditorClient() {
     return { error: await response.text() } as T & { error?: string }
   }, [])
 
+  const resolveIssuePhotoTenantId = useCallback(
+    (drawingTenantId?: string | null) =>
+      resolvePhotoUploadTenantId({
+        drawingTenantId,
+        projectTenantId: project?.tenant_id,
+        profileTenantId,
+      }),
+    [profileTenantId, project?.tenant_id],
+  )
+
+  const uploadIssuePhotosForSave = useCallback(
+    async (params: {
+      tenantId: string
+      projectId: string
+      drawingId: string
+      folderId: string
+      beforePhotoFile: File | null
+      afterPhotoFile: File | null
+    }): Promise<{ beforePhotoPath: string | null; afterPhotoPath: string | null } | null> => {
+      const { tenantId, projectId: resolvedProjectId, drawingId: resolvedDrawingId, folderId, beforePhotoFile, afterPhotoFile } =
+        params
+
+      console.log('photo upload ids:', {
+        tenantId,
+        projectId: resolvedProjectId,
+        drawingId: resolvedDrawingId,
+      })
+
+      let beforePhotoPath: string | null = null
+      let afterPhotoPath: string | null = null
+
+      if (beforePhotoFile) {
+        try {
+          beforePhotoPath = await uploadIssuePhotoFromClient(
+            tenantId,
+            resolvedProjectId,
+            resolvedDrawingId,
+            folderId,
+            'before',
+            beforePhotoFile,
+          )
+          console.log('before photo uploaded:', beforePhotoPath)
+        } catch (error) {
+          console.error('before photo upload error:', error)
+          console.error('photo upload error:', error)
+          toast.error('ビフォー写真のアップロードに失敗しました')
+          return null
+        }
+      }
+
+      if (afterPhotoFile) {
+        try {
+          afterPhotoPath = await uploadIssuePhotoFromClient(
+            tenantId,
+            resolvedProjectId,
+            resolvedDrawingId,
+            folderId,
+            'after',
+            afterPhotoFile,
+          )
+          console.log('after photo uploaded:', afterPhotoPath)
+        } catch (error) {
+          console.error('after photo upload error:', error)
+          console.error('photo upload error:', error)
+          toast.error('アフター写真のアップロードに失敗しました')
+          return null
+        }
+      }
+
+      return { beforePhotoPath, afterPhotoPath }
+    },
+    [],
+  )
+
   const createIssue = useCallback(
     async (values: IssueFormValues, continueMode: boolean) => {
       if (!addingPin || !currentDrawing) return
@@ -590,39 +676,35 @@ export default function DrawingEditorClient() {
 
         let beforePhotoPath: string | null = null
         let afterPhotoPath: string | null = null
-        const tempFolderId = createTempIssueFolderId()
 
-        try {
-          if (beforePhotoFile) {
-            beforePhotoPath = await uploadIssuePhotoFromClient(
-              currentDrawing.tenant_id,
+        if (beforePhotoFile || afterPhotoFile) {
+          const tenantId = resolveIssuePhotoTenantId(currentDrawing.tenant_id)
+          if (!tenantId || !projectId || !drawingId) {
+            console.error('photo upload missing ids:', {
+              tenantId,
               projectId,
               drawingId,
-              tempFolderId,
-              'before',
-              beforePhotoFile,
-            )
-            console.log('before photo path:', beforePhotoPath)
+            })
+            toast.error('写真保存に必要な情報が不足しています')
+            return
           }
-          if (afterPhotoFile) {
-            afterPhotoPath = await uploadIssuePhotoFromClient(
-              currentDrawing.tenant_id,
-              projectId,
-              drawingId,
-              tempFolderId,
-              'after',
-              afterPhotoFile,
-            )
-            console.log('after photo path:', afterPhotoPath)
-          }
-        } catch (error) {
-          console.error('photo upload error:', error)
-          toast.error('写真のアップロードに失敗しました')
-          return
+
+          const uploadResult = await uploadIssuePhotosForSave({
+            tenantId,
+            projectId,
+            drawingId,
+            folderId: createTempIssueFolderId(),
+            beforePhotoFile,
+            afterPhotoFile,
+          })
+          if (!uploadResult) return
+          beforePhotoPath = uploadResult.beforePhotoPath
+          afterPhotoPath = uploadResult.afterPhotoPath
         }
 
         const payload = {
-          tenant_id: currentDrawing.tenant_id,
+          tenant_id:
+            resolveIssuePhotoTenantId(currentDrawing.tenant_id) ?? currentDrawing.tenant_id,
           project_id: projectId,
           drawing_id: drawingId,
           page_index: pageIndex ?? 0,
@@ -677,7 +759,19 @@ export default function DrawingEditorClient() {
         toast.error('保存失敗')
       }
     },
-    [addingPin, currentDrawing, drawingId, isFallbackContractor, pageIndex, parseApiResponse, projectId, refetchIssues, setMode],
+    [
+      addingPin,
+      currentDrawing,
+      drawingId,
+      isFallbackContractor,
+      pageIndex,
+      parseApiResponse,
+      projectId,
+      refetchIssues,
+      resolveIssuePhotoTenantId,
+      setMode,
+      uploadIssuePhotosForSave,
+    ],
   )
 
   const updateIssue = useCallback(
@@ -698,33 +792,38 @@ export default function DrawingEditorClient() {
           afterPhotoPath = null
         }
 
-        try {
+        if (beforePhotoFile || afterPhotoFile) {
+          const tenantId = resolveIssuePhotoTenantId(
+            targetIssue.tenant_id ?? currentDrawing?.tenant_id,
+          )
+          const resolvedProjectId = targetIssue.project_id || projectId
+          const resolvedDrawingId = targetIssue.drawing_id || drawingId
+          if (!tenantId || !resolvedProjectId || !resolvedDrawingId) {
+            console.error('photo upload missing ids:', {
+              tenantId,
+              projectId: resolvedProjectId,
+              drawingId: resolvedDrawingId,
+            })
+            toast.error('写真保存に必要な情報が不足しています')
+            return
+          }
+
+          const uploadResult = await uploadIssuePhotosForSave({
+            tenantId,
+            projectId: resolvedProjectId,
+            drawingId: resolvedDrawingId,
+            folderId: targetIssue.id,
+            beforePhotoFile,
+            afterPhotoFile,
+          })
+          if (!uploadResult) return
+
           if (beforePhotoFile) {
-            beforePhotoPath = await uploadIssuePhotoFromClient(
-              targetIssue.tenant_id,
-              targetIssue.project_id,
-              targetIssue.drawing_id,
-              targetIssue.id,
-              'before',
-              beforePhotoFile,
-            )
-            console.log('before photo path:', beforePhotoPath)
+            beforePhotoPath = uploadResult.beforePhotoPath
           }
           if (afterPhotoFile) {
-            afterPhotoPath = await uploadIssuePhotoFromClient(
-              targetIssue.tenant_id,
-              targetIssue.project_id,
-              targetIssue.drawing_id,
-              targetIssue.id,
-              'after',
-              afterPhotoFile,
-            )
-            console.log('after photo path:', afterPhotoPath)
+            afterPhotoPath = uploadResult.afterPhotoPath
           }
-        } catch (error) {
-          console.error('photo upload error:', error)
-          toast.error('写真のアップロードに失敗しました')
-          return
         }
 
         const payload: Record<string, unknown> = {
@@ -777,7 +876,17 @@ export default function DrawingEditorClient() {
         toast.error('更新に失敗しました')
       }
     },
-    [currentDrawing?.floor_label, drawingId, isFallbackContractor, parseApiResponse, refetchIssues],
+    [
+      currentDrawing?.floor_label,
+      currentDrawing?.tenant_id,
+      drawingId,
+      isFallbackContractor,
+      parseApiResponse,
+      projectId,
+      refetchIssues,
+      resolveIssuePhotoTenantId,
+      uploadIssuePhotosForSave,
+    ],
   )
 
   const deleteIssue = async () => {

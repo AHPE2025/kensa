@@ -51,14 +51,18 @@ function PhotoSlot({
   label,
   placeholder,
   previewUrl,
+  loadError,
   onSelectFile,
   onClear,
+  onPreviewError,
 }: {
   label: string
   placeholder: string
   previewUrl: string | null
+  loadError: boolean
   onSelectFile: (file: File) => void
   onClear: () => void
+  onPreviewError: () => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -81,10 +85,40 @@ function PhotoSlot({
         className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-muted text-xs text-muted-foreground transition-colors hover:bg-muted/80"
         onClick={() => inputRef.current?.click()}
       >
-        {previewUrl ? (
+        {loadError ? (
+          <>
+            <span className="px-2 text-center text-destructive">写真を読み込めません</span>
+            <span
+              role="button"
+              tabIndex={0}
+              className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+              onClick={(event) => {
+                event.stopPropagation()
+                onClear()
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onClear()
+                }
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </span>
+          </>
+        ) : previewUrl ? (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={previewUrl} alt={label} className="h-full w-full object-cover" />
+            <img
+              src={previewUrl}
+              alt={label}
+              className="h-full w-full object-cover"
+              onError={() => {
+                console.error('photo display error:', { label, previewUrl })
+                onPreviewError()
+              }}
+            />
             <span
               role="button"
               tabIndex={0}
@@ -135,6 +169,8 @@ export function IssueModal({
   const [clearAfterPhoto, setClearAfterPhoto] = useState(false)
   const [beforePreviewUrl, setBeforePreviewUrl] = useState<string | null>(null)
   const [afterPreviewUrl, setAfterPreviewUrl] = useState<string | null>(null)
+  const [beforePhotoLoadError, setBeforePhotoLoadError] = useState(false)
+  const [afterPhotoLoadError, setAfterPhotoLoadError] = useState(false)
   const [customIssueType, setCustomIssueType] = useState('')
   const [autoMessage, setAutoMessage] = useState<string | null>(null)
 
@@ -160,11 +196,15 @@ export function IssueModal({
     setClearAfterPhoto(false)
     setBeforePreviewUrl(defaultBeforePhotoUrl ?? null)
     setAfterPreviewUrl(defaultAfterPhotoUrl ?? null)
+    setBeforePhotoLoadError(false)
+    setAfterPhotoLoadError(false)
     setAutoMessage(null)
   }, [open, defaultValues, defaultBeforePhotoUrl, defaultAfterPhotoUrl, issueTypeOptions])
 
   useEffect(() => {
     if (!beforePhotoFile) return
+    console.log('before photo file:', beforePhotoFile)
+    setBeforePhotoLoadError(false)
     const objectUrl = URL.createObjectURL(beforePhotoFile)
     setBeforePreviewUrl(objectUrl)
     return () => URL.revokeObjectURL(objectUrl)
@@ -172,10 +212,58 @@ export function IssueModal({
 
   useEffect(() => {
     if (!afterPhotoFile) return
+    console.log('after photo file:', afterPhotoFile)
+    setAfterPhotoLoadError(false)
     const objectUrl = URL.createObjectURL(afterPhotoFile)
     setAfterPreviewUrl(objectUrl)
     return () => URL.revokeObjectURL(objectUrl)
   }, [afterPhotoFile])
+
+  useEffect(() => {
+    if (!open || beforePhotoFile) return
+    if (!defaultBeforePhotoUrl) {
+      setBeforePhotoLoadError(false)
+      return
+    }
+    let cancelled = false
+    const img = new Image()
+    img.onload = () => {
+      if (!cancelled) setBeforePhotoLoadError(false)
+    }
+    img.onerror = () => {
+      if (!cancelled) {
+        console.error('photo display error:', { kind: 'before', url: defaultBeforePhotoUrl })
+        setBeforePhotoLoadError(true)
+      }
+    }
+    img.src = defaultBeforePhotoUrl
+    return () => {
+      cancelled = true
+    }
+  }, [open, beforePhotoFile, defaultBeforePhotoUrl])
+
+  useEffect(() => {
+    if (!open || afterPhotoFile) return
+    if (!defaultAfterPhotoUrl) {
+      setAfterPhotoLoadError(false)
+      return
+    }
+    let cancelled = false
+    const img = new Image()
+    img.onload = () => {
+      if (!cancelled) setAfterPhotoLoadError(false)
+    }
+    img.onerror = () => {
+      if (!cancelled) {
+        console.error('photo display error:', { kind: 'after', url: defaultAfterPhotoUrl })
+        setAfterPhotoLoadError(true)
+      }
+    }
+    img.src = defaultAfterPhotoUrl
+    return () => {
+      cancelled = true
+    }
+  }, [open, afterPhotoFile, defaultAfterPhotoUrl])
 
   const filteredContractors = useMemo(() => {
     const key = contractorSearch.trim().toLowerCase()
@@ -382,30 +470,38 @@ export function IssueModal({
             <PhotoSlot
               label="ビフォー写真"
               placeholder="クリックしてビフォー写真を追加"
-              previewUrl={beforePreviewUrl}
+              previewUrl={beforePhotoLoadError ? null : beforePreviewUrl}
+              loadError={beforePhotoLoadError}
               onSelectFile={(file) => {
                 setBeforePhotoFile(file)
                 setClearBeforePhoto(false)
+                setBeforePhotoLoadError(false)
               }}
               onClear={() => {
                 setBeforePhotoFile(null)
                 setBeforePreviewUrl(null)
                 setClearBeforePhoto(true)
+                setBeforePhotoLoadError(false)
               }}
+              onPreviewError={() => setBeforePhotoLoadError(true)}
             />
             <PhotoSlot
               label="アフター写真"
               placeholder="クリックしてアフター写真を追加"
-              previewUrl={afterPreviewUrl}
+              previewUrl={afterPhotoLoadError ? null : afterPreviewUrl}
+              loadError={afterPhotoLoadError}
               onSelectFile={(file) => {
                 setAfterPhotoFile(file)
                 setClearAfterPhoto(false)
+                setAfterPhotoLoadError(false)
               }}
               onClear={() => {
                 setAfterPhotoFile(null)
                 setAfterPreviewUrl(null)
                 setClearAfterPhoto(true)
+                setAfterPhotoLoadError(false)
               }}
+              onPreviewError={() => setAfterPhotoLoadError(true)}
             />
           </div>
         </div>

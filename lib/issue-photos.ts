@@ -1,13 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  buildIssuePhotoStoragePath,
+  buildIssuePhotoPath,
   createTempIssueFolderId,
   ISSUE_PHOTO_ACCEPT,
-  sanitizeIssuePhotoFileName,
 } from '@/lib/issue-photo-paths'
 import { DRAWING_SIGNED_URL_TTL_SECONDS, ISSUE_PHOTOS_BUCKET } from '@/lib/storage'
 
-export { ISSUE_PHOTO_ACCEPT, sanitizeIssuePhotoFileName, buildIssuePhotoStoragePath, createTempIssueFolderId }
+export { ISSUE_PHOTO_ACCEPT, buildIssuePhotoPath, createTempIssueFolderId }
 
 export async function uploadIssuePhotoFile(
   client: SupabaseClient,
@@ -18,16 +17,17 @@ export async function uploadIssuePhotoFile(
   kind: 'before' | 'after',
   file: File,
 ) {
-  const path = buildIssuePhotoStoragePath(
+  const path = buildIssuePhotoPath({
     tenantId,
     projectId,
     drawingId,
-    issueIdOrTemp,
+    tempId: issueIdOrTemp,
     kind,
-    file.name,
-  )
+    file,
+  })
   const bytes = Buffer.from(await file.arrayBuffer())
   const { error } = await client.storage.from(ISSUE_PHOTOS_BUCKET).upload(path, bytes, {
+    cacheControl: '3600',
     contentType: file.type || 'image/jpeg',
     upsert: false,
   })

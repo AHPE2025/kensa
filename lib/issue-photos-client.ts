@@ -1,7 +1,7 @@
 'use client'
 
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
-import { buildIssuePhotoStoragePath } from '@/lib/issue-photo-paths'
+import { buildIssuePhotoPath } from '@/lib/issue-photo-paths'
 import { ISSUE_PHOTOS_BUCKET } from '@/lib/storage'
 import type { ExportIssue, PhotoSignedUrlEntry } from '@/lib/pdf-export-client'
 
@@ -16,17 +16,25 @@ export async function uploadIssuePhotoFromClient(
   file: File,
 ): Promise<string> {
   const supabase = getSupabaseBrowserClient()
-  const path = buildIssuePhotoStoragePath(
+  const path = buildIssuePhotoPath({
     tenantId,
     projectId,
     drawingId,
-    issueIdOrTemp,
+    tempId: issueIdOrTemp,
     kind,
-    file.name,
-  )
+    file,
+  })
+
+  if (kind === 'before') {
+    console.log('before photo upload path:', path)
+  } else {
+    console.log('after photo upload path:', path)
+  }
+
   const { error } = await supabase.storage.from(ISSUE_PHOTOS_BUCKET).upload(path, file, {
-    contentType: file.type || 'image/jpeg',
+    cacheControl: '3600',
     upsert: false,
+    contentType: file.type || 'image/jpeg',
   })
   if (error) {
     throw error
@@ -34,7 +42,9 @@ export async function uploadIssuePhotoFromClient(
   return path
 }
 
-async function createIssuePhotoSignedUrlClient(path: string | null | undefined): Promise<string | null> {
+export async function createIssuePhotoSignedUrlClient(
+  path: string | null | undefined,
+): Promise<string | null> {
   if (!path) return null
   const supabase = getSupabaseBrowserClient()
   const { data, error } = await supabase.storage
