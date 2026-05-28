@@ -9,9 +9,11 @@ export type PdfExportIssueTableProps = {
   address?: string | null
   inspectionDate: string
   exportDate: string
+  floorLabel: string
   badgeLabel: string
   badgeVariant?: 'contractor' | 'common' | 'unassigned' | 'all'
   issues: ExportIssue[]
+  emptyMessage?: string
 }
 
 function issueContractorName(issue: ExportIssue): string {
@@ -45,9 +47,11 @@ export function PdfExportIssueTable({
   address,
   inspectionDate,
   exportDate,
+  floorLabel,
   badgeLabel,
   badgeVariant = 'contractor',
   issues,
+  emptyMessage = '指摘はありません',
 }: PdfExportIssueTableProps) {
   const stats = countStats(issues)
 
@@ -68,6 +72,7 @@ export function PdfExportIssueTable({
           <div className="text-right">
             <p className="text-sm text-slate-600">検査日：{inspectionDate}</p>
             <p className="mt-1 text-sm text-slate-600">出力日：{exportDate}</p>
+            <p className="mt-1 text-sm text-slate-600">対象階：{floorLabel}</p>
             <span
               className={`mt-3 inline-block rounded-full px-4 py-1.5 text-sm font-semibold ${BADGE_STYLES[badgeVariant]}`}
             >
@@ -101,7 +106,7 @@ export function PdfExportIssueTable({
             {issues.length === 0 ? (
               <tr>
                 <td colSpan={6} className="border border-slate-200 px-3 py-8 text-center text-slate-500">
-                  指摘はありません
+                  {emptyMessage}
                 </td>
               </tr>
             ) : (

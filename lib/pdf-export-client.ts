@@ -18,7 +18,7 @@ export type PdfExportMeta = {
 
 export type NumberedIssue = Issue & { no: number }
 
-export type ExportIssue = Issue & { exportNo: number; no: number }
+export type ExportIssue = Issue & { exportNo: number | string; no: number }
 
 export type PdfExportSplit = {
   selectedIssues: ExportIssue[]
@@ -56,10 +56,17 @@ export function isUnassignedIssue(issue: Issue): boolean {
 
 export { issueStatusLabel, normalizeIssueStatus, type IssueStatus } from '@/lib/issue-status'
 
-function assignExportNumbers(issues: Issue[]): ExportIssue[] {
+function assignVendorExportNumbers(issues: Issue[]): ExportIssue[] {
   return issues.map((issue, index) => {
     const exportNo = index + 1
     return { ...issue, exportNo, no: exportNo }
+  })
+}
+
+function assignCommonExportNumbers(issues: Issue[]): ExportIssue[] {
+  return issues.map((issue, index) => {
+    const exportNo = `C-${index + 1}`
+    return { ...issue, exportNo, no: index + 1 }
   })
 }
 
@@ -100,12 +107,9 @@ export function splitIssuesForPdfExport(
     separateCommonPage = commonIssuesForPage.length > 0
   }
 
-  const drawingIssues = assignExportNumbers([...selectedIssuesRaw, ...commonIssuesForPage])
-  const selectedIdSet = new Set(selectedIssuesRaw.map((issue) => issue.id))
-  const commonIdSet = new Set(commonIssuesForPage.map((issue) => issue.id))
-
-  const selectedIssues = drawingIssues.filter((issue) => selectedIdSet.has(issue.id))
-  const commonIssues = drawingIssues.filter((issue) => commonIdSet.has(issue.id))
+  const selectedIssues = assignVendorExportNumbers(selectedIssuesRaw)
+  const commonIssues = assignCommonExportNumbers(commonIssuesForPage)
+  const drawingIssues = [...selectedIssues, ...commonIssues]
   const photoDetailIssues = drawingIssues.filter(
     (issue) => issue.before_photo_path || issue.after_photo_path,
   )

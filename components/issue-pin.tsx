@@ -6,7 +6,7 @@ import type Konva from 'konva'
 import type { Issue } from '@/lib/domain'
 import { normalizeIssueStatus } from '@/lib/issue-status'
 
-type NumberedIssue = Issue & { no: number; exportNo?: number }
+type NumberedIssue = Issue & { no: number; exportNo?: number | string }
 
 export type DragOverride = {
   pin_x?: number
@@ -85,7 +85,7 @@ function IssuePinMarker({
   pinX: number
   pinY: number
   pinColor: string
-  displayNo: number
+  displayNo: number | string
   isSelected: boolean
   isDragging: boolean
   canDrag: boolean
