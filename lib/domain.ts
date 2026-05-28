@@ -1,5 +1,40 @@
 export const ISSUE_TYPES = ['傷', '汚れ', '補修', '隙間', '浮き', '凹み', '調整', 'その他'] as const
 
+export const DEFAULT_ISSUE_TYPE_OPTIONS = [
+  '傷',
+  '汚れ',
+  '隙間',
+  '浮き',
+  '凹み',
+  '調整',
+  '建具調整',
+  'サッシ不具合',
+  '設備不具合',
+  '共通',
+  'その他',
+] as const
+
+export type AssignmentType = 'contractor' | 'common' | 'unassigned'
+
+export type IssueTypeContractorMapping = {
+  id: string
+  tenant_id: string
+  project_id: string | null
+  issue_type: string
+  contractor_id: string | null
+  assignment_type: AssignmentType
+  sort_order: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  contractor?: {
+    id: string
+    name: string
+    category: string | null
+    phone: string | null
+  } | null
+}
+
 export const DRAWING_FLOOR_LABEL_OPTIONS = [
   'B3F',
   'B2F',

@@ -22,7 +22,8 @@ import { createTempIssueFolderId } from '@/lib/issue-photo-paths'
 import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
-import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type Project } from '@/lib/domain'
+import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type IssueTypeContractorMapping, type Project } from '@/lib/domain'
+import { buildIssueSaveCategory, buildIssueTypeOptions } from '@/lib/issue-type-mapping'
 import {
   buildInspectionReportPdf,
   captureElement,
@@ -120,6 +121,7 @@ export default function DrawingEditorClient() {
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
   const [currentDrawing, setCurrentDrawing] = useState<DrawingRow | null>(null)
   const [contractors, setContractors] = useState<Contractor[]>([])
+  const [issueTypeMappings, setIssueTypeMappings] = useState<IssueTypeContractorMapping[]>([])
   const [pageIndex, setPageIndex] = useState(0)
   const [imageError, setImageError] = useState<string | null>(null)
   const [pdfPageCount, setPdfPageCount] = useState(0)
@@ -176,17 +178,22 @@ export default function DrawingEditorClient() {
 
   const loadData = async () => {
     try {
-      const [drawingListRes, contractorRes, issueRes, projectRes] = await Promise.all([
+      const [drawingListRes, contractorRes, issueRes, projectRes, mappingRes] = await Promise.all([
         authedFetch(`/api/projects/${projectId}/drawings`),
         authedFetch(`/api/projects/${projectId}/contractors`),
         authedFetch(`/api/drawings/${drawingId}/issues`),
         authedFetch(`/api/projects/${projectId}`),
+        authedFetch(`/api/projects/${projectId}/issue-type-mappings`),
       ])
 
       const drawingListData = (await drawingListRes.json()) as { drawings?: DrawingRow[]; error?: string }
       const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
       const issueData = (await issueRes.json()) as { drawing?: DrawingRow; issues?: Issue[]; error?: string }
       const projectData = (await projectRes.json()) as { project?: Project; error?: string }
+      const mappingData = (await mappingRes.json()) as {
+        mappings?: IssueTypeContractorMapping[]
+        error?: string
+      }
 
       if (!drawingListRes.ok) {
         console.error('load project drawings error:', drawingListData.error ?? '図面取得失敗')
@@ -194,6 +201,12 @@ export default function DrawingEditorClient() {
       }
       if (!contractorRes.ok) return toast.error(contractorData.error ?? '業者取得失敗')
       if (!issueRes.ok) return toast.error(issueData.error ?? '指摘取得失敗')
+      if (!mappingRes.ok) {
+        console.error('load issue type mappings error:', mappingData.error)
+      } else {
+        console.log('issue type mappings:', mappingData.mappings)
+        setIssueTypeMappings(mappingData.mappings ?? [])
+      }
       if (projectRes.ok && projectData.project) {
         setProject(projectData.project)
       }
@@ -323,6 +336,11 @@ export default function DrawingEditorClient() {
     const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
     return sorted.map((issue, index) => ({ ...issue, no: index + 1 }))
   }, [issues])
+
+  const issueTypeOptions = useMemo(
+    () => buildIssueTypeOptions(issueTypeMappings, issues.map((issue) => issue.issue_type)),
+    [issueTypeMappings, issues],
+  )
 
   const pageIssues = useMemo(() => {
     const key = listFilters.searchText.trim().toLowerCase()
@@ -590,7 +608,7 @@ export default function DrawingEditorClient() {
           floor_label: currentDrawing.floor_label ?? '1F',
           issue_type: values.issue_type,
           issue_text: values.issue_text.trim() || null,
-          issue_category: values.issue_category || values.issue_type || null,
+          issue_category: buildIssueSaveCategory(values),
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id
@@ -603,6 +621,7 @@ export default function DrawingEditorClient() {
           before_photo_path: beforePhotoPath,
           after_photo_path: afterPhotoPath,
         }
+        console.log('issue payload with mapping:', payload)
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
         console.log('auto floor_label:', currentDrawing?.floor_label)
 
@@ -690,7 +709,7 @@ export default function DrawingEditorClient() {
           floor_label: currentDrawing?.floor_label ?? '1F',
           issue_type: values.issue_type,
           issue_text: values.issue_text.trim() || null,
-          issue_category: values.issue_category || values.issue_type || null,
+          issue_category: buildIssueSaveCategory(values),
           contractor_id:
             values.contractor_id && !isFallbackContractor(values.contractor_id)
               ? values.contractor_id
@@ -705,6 +724,7 @@ export default function DrawingEditorClient() {
           payload.after_photo_path = afterPhotoPath
         }
 
+        console.log('issue payload with mapping:', payload)
         console.log('issue payload FULL:', JSON.stringify(payload, null, 2))
 
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${targetIssue.id}`, {
@@ -1230,8 +1250,11 @@ export default function DrawingEditorClient() {
         open={issueModalOpen}
         title={editingIssue ? '指摘を編集' : '指摘を追加'}
         contractors={contractors}
+        issueTypeOptions={issueTypeOptions}
+        issueTypeMappings={issueTypeMappings}
+        isEditMode={Boolean(editingIssue)}
         defaultValues={{
-          issue_type: editingIssue?.issue_type ?? ISSUE_TYPES[0],
+          issue_type: editingIssue?.issue_type ?? issueTypeOptions[0] ?? ISSUE_TYPES[0],
           issue_text: editingIssue?.issue_text ?? '',
           contractor_id: editingIssue?.contractor_id ?? '',
           issue_category: editingIssue?.issue_category ?? '',

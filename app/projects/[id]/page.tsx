@@ -29,6 +29,7 @@ import {
 } from '@/lib/domain'
 import { toast } from 'sonner'
 import { PdfExportPanel } from '@/components/pdf-export-panel'
+import { IssueTypeMappingSection } from '@/components/issue-type-mapping-section'
 
 type DrawingRow = Drawing & { issue_count: number; file_name: string; signed_url: string | null }
 
@@ -373,6 +374,7 @@ export default function ProjectDetailPage() {
               </Table>
             </CardContent>
           </Card>
+          <IssueTypeMappingSection projectId={projectId} contractors={contractors} />
         </TabsContent>
 
         <TabsContent value="exports">
