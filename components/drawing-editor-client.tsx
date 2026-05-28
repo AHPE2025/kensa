@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Download, Filter, MapPin, Trash2 } from 'lucide-react'
 import { Document, Page, pdfjs } from 'react-pdf'
-import { Layer, Stage } from 'react-konva'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -36,7 +35,7 @@ import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel } from '@/components/issue-list-panel'
 import { ContractorFilter } from '@/components/contractor-filter'
-import { IssuePin } from '@/components/issue-pin'
+import { IssuePinsStage } from '@/components/issue-pins-stage'
 import { IssueModal } from '@/components/issue-modal'
 
 type DrawingRow = Drawing & {
@@ -745,25 +744,30 @@ export default function DrawingEditorClient() {
     async (issueId: string, pinX: number, pinY: number) => {
       console.log('pin drag end:', { issueId, pin_x: pinX, pin_y: pinY })
       const previousIssues = useEditorStore.getState().issues
+      const updatedAt = new Date().toISOString()
       setIssues(
         previousIssues.map((issue) =>
-          issue.id === issueId ? { ...issue, pin_x: pinX, pin_y: pinY } : issue,
+          issue.id === issueId ? { ...issue, pin_x: pinX, pin_y: pinY, updated_at: updatedAt } : issue,
         ),
       )
       try {
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pin_x: pinX, pin_y: pinY }),
+          body: JSON.stringify({ pin_x: pinX, pin_y: pinY, updated_at: updatedAt }),
         })
         const data = (await response.json()) as { error?: string }
         if (!response.ok) {
           console.error('update issue position error:', data.error ?? data)
           setIssues(previousIssues)
+          toast.error('位置の保存に失敗しました')
+          return
         }
+        console.log('issue position saved:', { issueId })
       } catch (error) {
         console.error('update issue position error:', error)
         setIssues(previousIssues)
+        toast.error('位置の保存に失敗しました')
       }
     },
     [drawingId, setIssues],
@@ -773,25 +777,32 @@ export default function DrawingEditorClient() {
     async (issueId: string, calloutX: number, calloutY: number) => {
       console.log('callout drag end:', { issueId, callout_x: calloutX, callout_y: calloutY })
       const previousIssues = useEditorStore.getState().issues
+      const updatedAt = new Date().toISOString()
       setIssues(
         previousIssues.map((issue) =>
-          issue.id === issueId ? { ...issue, callout_x: calloutX, callout_y: calloutY } : issue,
+          issue.id === issueId
+            ? { ...issue, callout_x: calloutX, callout_y: calloutY, updated_at: updatedAt }
+            : issue,
         ),
       )
       try {
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ callout_x: calloutX, callout_y: calloutY }),
+          body: JSON.stringify({ callout_x: calloutX, callout_y: calloutY, updated_at: updatedAt }),
         })
         const data = (await response.json()) as { error?: string }
         if (!response.ok) {
           console.error('update issue position error:', data.error ?? data)
           setIssues(previousIssues)
+          toast.error('位置の保存に失敗しました')
+          return
         }
+        console.log('issue position saved:', { issueId })
       } catch (error) {
         console.error('update issue position error:', error)
         setIssues(previousIssues)
+        toast.error('位置の保存に失敗しました')
       }
     },
     [drawingId, setIssues],
@@ -1121,34 +1132,22 @@ export default function DrawingEditorClient() {
                         }}
                       />
                     </Document>
-                    <Stage
-                      width={stageWidth}
-                      height={stageHeight}
-                      className="absolute inset-0"
-                      style={mode === 'edit' ? { cursor: 'grab' } : undefined}
-                      onClick={handleStageClick}
-                    >
-                      <Layer>
-                        {pinsToRender.map((issue) => {
-                          if (!isExporting && !visibleContractorIds.has(getIssueContractorId(issue))) return null
-                          return (
-                            <IssuePin
-                              key={issue.id}
-                              issue={issue}
-                              stageWidth={stageWidth}
-                              stageHeight={stageHeight}
-                              isSelected={selectedIssueId === issue.id}
-                              canDrag={mode === 'edit'}
-                              onSelect={handleIssueSelect}
-                              onEdit={startEditIssue}
-                              onDeleteRequest={requestDeleteIssue}
-                              onDragPin={updatePinPosition}
-                              onDragCallout={updateCalloutPosition}
-                            />
-                          )
-                        })}
-                      </Layer>
-                    </Stage>
+                    <IssuePinsStage
+                      pinsToRender={pinsToRender}
+                      stageWidth={stageWidth}
+                      stageHeight={stageHeight}
+                      mode={mode}
+                      selectedIssueId={selectedIssueId}
+                      isExporting={isExporting}
+                      visibleContractorIds={visibleContractorIds}
+                      getIssueContractorId={getIssueContractorId}
+                      onStageClick={handleStageClick}
+                      onSelect={handleIssueSelect}
+                      onEdit={startEditIssue}
+                      onDeleteRequest={requestDeleteIssue}
+                      onDragPin={updatePinPosition}
+                      onDragCallout={updateCalloutPosition}
+                    />
                   </div>
                 </div>
               </div>

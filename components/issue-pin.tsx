@@ -1,11 +1,18 @@
 'use client'
 
-import { memo, useCallback, useRef } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Circle, Group, Label, Line, Tag, Text as KonvaText } from 'react-konva'
 import type Konva from 'konva'
 import type { Issue } from '@/lib/domain'
 
 type NumberedIssue = Issue & { no: number }
+
+export type DragOverride = {
+  pin_x?: number
+  pin_y?: number
+  callout_x?: number
+  callout_y?: number
+}
 
 type IssuePinProps = {
   issue: NumberedIssue
@@ -13,9 +20,11 @@ type IssuePinProps = {
   stageHeight: number
   isSelected: boolean
   canDrag: boolean
+  dragOverride?: DragOverride | null
   onSelect: (issue: NumberedIssue) => void
   onEdit: (issue: NumberedIssue) => void
   onDeleteRequest: (issue: NumberedIssue) => void
+  onDragMove?: (issueId: string, target: 'pin' | 'callout', x: number, y: number) => void
   onDragPin: (issueId: string, pinX: number, pinY: number) => void
   onDragCallout: (issueId: string, calloutX: number, calloutY: number) => void
 }
@@ -31,7 +40,6 @@ function IssueConnectorLine({
   calloutY,
   stroke,
   strokeWidth,
-  lineRef,
 }: {
   pinX: number
   pinY: number
@@ -39,16 +47,15 @@ function IssueConnectorLine({
   calloutY: number
   stroke: string
   strokeWidth: number
-  lineRef: React.RefObject<Konva.Line | null>
 }) {
   return (
     <Line
-      ref={lineRef}
       points={[pinX, pinY, calloutX, calloutY]}
       stroke={stroke}
       strokeWidth={strokeWidth}
       dash={[6, 4]}
       listening={false}
+      perfectDrawEnabled={false}
     />
   )
 }
@@ -61,24 +68,30 @@ function IssuePinMarker({
   pinY,
   pinColor,
   isSelected,
+  isDragging,
   canDrag,
   onSelect,
   onEdit,
   onPinDragMove,
   onPinDragStart,
   onPinDragEnd,
+  onPinMouseEnter,
+  onPinMouseLeave,
 }: {
   issue: NumberedIssue
   pinX: number
   pinY: number
   pinColor: string
   isSelected: boolean
+  isDragging: boolean
   canDrag: boolean
   onSelect: (issue: NumberedIssue) => void
   onEdit: (issue: NumberedIssue) => void
   onPinDragMove: (event: Konva.KonvaEventObject<DragEvent>) => void
   onPinDragStart: (event: Konva.KonvaEventObject<DragEvent>) => void
   onPinDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => void
+  onPinMouseEnter: () => void
+  onPinMouseLeave: () => void
 }) {
   const stopBubble = (event: { cancelBubble: boolean }) => {
     event.cancelBubble = true
@@ -106,6 +119,8 @@ function IssuePinMarker({
       onDragStart={onPinDragStart}
       onDragMove={onPinDragMove}
       onDragEnd={onPinDragEnd}
+      onMouseEnter={onPinMouseEnter}
+      onMouseLeave={onPinMouseLeave}
     >
       <Circle
         x={0}
@@ -114,6 +129,9 @@ function IssuePinMarker({
         fill={pinColor}
         stroke="#ffffff"
         strokeWidth={isSelected ? 4 : 2}
+        shadowBlur={isDragging ? 14 : isSelected ? 6 : 0}
+        shadowOpacity={isDragging ? 0.4 : 0.25}
+        shadowColor="#000000"
       />
       <KonvaText
         x={-8}
@@ -126,6 +144,7 @@ function IssuePinMarker({
         fontStyle="bold"
         fill="#ffffff"
         text={String(issue.no)}
+        listening={false}
       />
     </Group>
   )
@@ -142,6 +161,7 @@ function IssueCalloutLabel({
   calloutStrokeWidth,
   calloutText,
   isSelected,
+  isDragging,
   canDrag,
   onSelect,
   onEdit,
@@ -149,6 +169,8 @@ function IssueCalloutLabel({
   onCalloutDragMove,
   onCalloutDragStart,
   onCalloutDragEnd,
+  onCalloutMouseEnter,
+  onCalloutMouseLeave,
 }: {
   issue: NumberedIssue
   calloutX: number
@@ -158,6 +180,7 @@ function IssueCalloutLabel({
   calloutStrokeWidth: number
   calloutText: string
   isSelected: boolean
+  isDragging: boolean
   canDrag: boolean
   onSelect: (issue: NumberedIssue) => void
   onEdit: (issue: NumberedIssue) => void
@@ -165,6 +188,8 @@ function IssueCalloutLabel({
   onCalloutDragMove: (event: Konva.KonvaEventObject<DragEvent>) => void
   onCalloutDragStart: (event: Konva.KonvaEventObject<DragEvent>) => void
   onCalloutDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => void
+  onCalloutMouseEnter: () => void
+  onCalloutMouseLeave: () => void
 }) {
   const stopBubble = (event: { cancelBubble: boolean }) => {
     event.cancelBubble = true
@@ -197,14 +222,17 @@ function IssueCalloutLabel({
       onDragStart={onCalloutDragStart}
       onDragMove={onCalloutDragMove}
       onDragEnd={onCalloutDragEnd}
+      onMouseEnter={onCalloutMouseEnter}
+      onMouseLeave={onCalloutMouseLeave}
     >
       <Tag
         fill={calloutBg}
         stroke={calloutStroke}
         strokeWidth={calloutStrokeWidth}
         cornerRadius={6}
-        shadowBlur={isSelected ? 8 : 0}
-        shadowOpacity={0.2}
+        shadowBlur={isDragging ? 14 : isSelected ? 8 : 0}
+        shadowOpacity={isDragging ? 0.35 : 0.2}
+        shadowColor="#000000"
       />
       <KonvaText padding={8} fontSize={11} lineHeight={1.3} fill="#0f172a" text={calloutText} />
       {canDrag && isSelected ? (
@@ -239,22 +267,21 @@ function IssuePinComponent({
   stageHeight,
   isSelected,
   canDrag,
+  dragOverride,
   onSelect,
   onEdit,
   onDeleteRequest,
+  onDragMove,
   onDragPin,
   onDragCallout,
 }: IssuePinProps) {
-  const lineRef = useRef<Konva.Line>(null)
-  const pinDragRafRef = useRef<number | null>(null)
-  const calloutDragRafRef = useRef<number | null>(null)
-  const pendingPinLineRef = useRef<{ x: number; y: number } | null>(null)
-  const pendingCalloutLineRef = useRef<{ x: number; y: number } | null>(null)
+  const [isDraggingPin, setIsDraggingPin] = useState(false)
+  const [isDraggingCallout, setIsDraggingCallout] = useState(false)
 
-  const pinX = issue.pin_x * stageWidth
-  const pinY = issue.pin_y * stageHeight
-  const calloutX = issue.callout_x * stageWidth
-  const calloutY = issue.callout_y * stageHeight
+  const displayPinX = (dragOverride?.pin_x ?? issue.pin_x) * stageWidth
+  const displayPinY = (dragOverride?.pin_y ?? issue.pin_y) * stageHeight
+  const displayCalloutX = (dragOverride?.callout_x ?? issue.callout_x) * stageWidth
+  const displayCalloutY = (dragOverride?.callout_y ?? issue.callout_y) * stageHeight
 
   const isDone = issue.status === '完了' || issue.status === 'done'
   const isInProgress = issue.status === '対応中'
@@ -279,143 +306,144 @@ function IssuePinComponent({
     .filter(Boolean)
     .join('\n')
 
-  const updateLinePoints = useCallback((px: number, py: number, cx: number, cy: number) => {
-    const line = lineRef.current
-    if (!line) return
-    line.points([px, py, cx, cy])
-    line.getLayer()?.batchDraw()
-  }, [])
+  const setDragCursor = useCallback(
+    (grabbing: boolean) => {
+      if (!canDrag) return
+      document.body.style.cursor = grabbing ? 'grabbing' : 'grab'
+    },
+    [canDrag],
+  )
 
-  const setDragCursor = useCallback((grabbing: boolean) => {
-    if (!canDrag) return
-    document.body.style.cursor = grabbing ? 'grabbing' : 'grab'
-  }, [canDrag])
+  const handlePinMouseEnter = useCallback(() => {
+    if (canDrag && !isDraggingPin) setDragCursor(false)
+  }, [canDrag, isDraggingPin, setDragCursor])
+
+  const handlePinMouseLeave = useCallback(() => {
+    if (canDrag && !isDraggingPin && !isDraggingCallout) {
+      document.body.style.cursor = ''
+    }
+  }, [canDrag, isDraggingPin, isDraggingCallout])
+
+  const handleCalloutMouseEnter = useCallback(() => {
+    if (canDrag && !isDraggingCallout) setDragCursor(false)
+  }, [canDrag, isDraggingCallout, setDragCursor])
+
+  const handleCalloutMouseLeave = useCallback(() => {
+    if (canDrag && !isDraggingPin && !isDraggingCallout) {
+      document.body.style.cursor = ''
+    }
+  }, [canDrag, isDraggingPin, isDraggingCallout])
 
   const handlePinDragStart = useCallback(
     (event: Konva.KonvaEventObject<DragEvent>) => {
       if (!canDrag) return
+      console.log('issue drag start:', { issueId: issue.id, target: 'pin' })
+      setIsDraggingPin(true)
       event.target.opacity(0.85)
       setDragCursor(true)
     },
-    [canDrag, setDragCursor],
+    [canDrag, issue.id, setDragCursor],
   )
 
   const handlePinDragMove = useCallback(
     (event: Konva.KonvaEventObject<DragEvent>) => {
       if (!canDrag) return
       const group = event.target
-      pendingPinLineRef.current = { x: group.x(), y: group.y() }
-      if (pinDragRafRef.current !== null) return
-      pinDragRafRef.current = requestAnimationFrame(() => {
-        pinDragRafRef.current = null
-        const pending = pendingPinLineRef.current
-        if (!pending) return
-        updateLinePoints(pending.x, pending.y, calloutX, calloutY)
-      })
+      onDragMove?.(issue.id, 'pin', group.x() / stageWidth, group.y() / stageHeight)
     },
-    [canDrag, calloutX, calloutY, updateLinePoints],
+    [canDrag, issue.id, onDragMove, stageHeight, stageWidth],
   )
 
   const handlePinDragEnd = useCallback(
     (event: Konva.KonvaEventObject<DragEvent>) => {
       if (!canDrag) return
-      if (pinDragRafRef.current !== null) {
-        cancelAnimationFrame(pinDragRafRef.current)
-        pinDragRafRef.current = null
-      }
       const group = event.target
       group.opacity(1)
+      setIsDraggingPin(false)
       setDragCursor(false)
       const nextX = clampRatio(group.x() / stageWidth)
       const nextY = clampRatio(group.y() / stageHeight)
       const nextPinX = nextX * stageWidth
       const nextPinY = nextY * stageHeight
       group.position({ x: nextPinX, y: nextPinY })
-      updateLinePoints(nextPinX, nextPinY, calloutX, calloutY)
       onDragPin(issue.id, nextX, nextY)
     },
-    [canDrag, calloutX, calloutY, issue.id, onDragPin, setDragCursor, stageHeight, stageWidth, updateLinePoints],
+    [canDrag, issue.id, onDragPin, setDragCursor, stageHeight, stageWidth],
   )
 
   const handleCalloutDragStart = useCallback(
     (event: Konva.KonvaEventObject<DragEvent>) => {
       if (!canDrag) return
+      console.log('issue drag start:', { issueId: issue.id, target: 'callout' })
+      setIsDraggingCallout(true)
       event.target.opacity(0.85)
       setDragCursor(true)
     },
-    [canDrag, setDragCursor],
+    [canDrag, issue.id, setDragCursor],
   )
 
   const handleCalloutDragMove = useCallback(
     (event: Konva.KonvaEventObject<DragEvent>) => {
       if (!canDrag) return
       const label = event.target
-      pendingCalloutLineRef.current = { x: label.x(), y: label.y() }
-      if (calloutDragRafRef.current !== null) return
-      calloutDragRafRef.current = requestAnimationFrame(() => {
-        calloutDragRafRef.current = null
-        const pending = pendingCalloutLineRef.current
-        if (!pending) return
-        updateLinePoints(pinX, pinY, pending.x, pending.y)
-      })
+      onDragMove?.(issue.id, 'callout', label.x() / stageWidth, label.y() / stageHeight)
     },
-    [canDrag, pinX, pinY, updateLinePoints],
+    [canDrag, issue.id, onDragMove, stageHeight, stageWidth],
   )
 
   const handleCalloutDragEnd = useCallback(
     (event: Konva.KonvaEventObject<DragEvent>) => {
       if (!canDrag) return
-      if (calloutDragRafRef.current !== null) {
-        cancelAnimationFrame(calloutDragRafRef.current)
-        calloutDragRafRef.current = null
-      }
       const label = event.target
       label.opacity(1)
+      setIsDraggingCallout(false)
       setDragCursor(false)
       const nextX = clampRatio(label.x() / stageWidth)
       const nextY = clampRatio(label.y() / stageHeight)
       const nextCalloutX = nextX * stageWidth
       const nextCalloutY = nextY * stageHeight
       label.position({ x: nextCalloutX, y: nextCalloutY })
-      updateLinePoints(pinX, pinY, nextCalloutX, nextCalloutY)
       onDragCallout(issue.id, nextX, nextY)
     },
-    [canDrag, issue.id, onDragCallout, pinX, pinY, setDragCursor, stageHeight, stageWidth, updateLinePoints],
+    [canDrag, issue.id, onDragCallout, setDragCursor, stageHeight, stageWidth],
   )
 
   return (
     <>
       <MemoIssueConnectorLine
-        pinX={pinX}
-        pinY={pinY}
-        calloutX={calloutX}
-        calloutY={calloutY}
+        pinX={displayPinX}
+        pinY={displayPinY}
+        calloutX={displayCalloutX}
+        calloutY={displayCalloutY}
         stroke={isSelected ? '#2563eb' : pinColor}
         strokeWidth={isSelected ? 2.5 : 1.5}
-        lineRef={lineRef}
       />
       <MemoIssuePinMarker
         issue={issue}
-        pinX={pinX}
-        pinY={pinY}
+        pinX={displayPinX}
+        pinY={displayPinY}
         pinColor={pinColor}
         isSelected={isSelected}
+        isDragging={isDraggingPin}
         canDrag={canDrag}
         onSelect={onSelect}
         onEdit={onEdit}
         onPinDragMove={handlePinDragMove}
         onPinDragStart={handlePinDragStart}
         onPinDragEnd={handlePinDragEnd}
+        onPinMouseEnter={handlePinMouseEnter}
+        onPinMouseLeave={handlePinMouseLeave}
       />
       <MemoIssueCalloutLabel
         issue={issue}
-        calloutX={calloutX}
-        calloutY={calloutY}
+        calloutX={displayCalloutX}
+        calloutY={displayCalloutY}
         calloutBg={calloutBg}
         calloutStroke={calloutStroke}
         calloutStrokeWidth={calloutStrokeWidth}
         calloutText={calloutText}
         isSelected={isSelected}
+        isDragging={isDraggingCallout}
         canDrag={canDrag}
         onSelect={onSelect}
         onEdit={onEdit}
@@ -423,9 +451,43 @@ function IssuePinComponent({
         onCalloutDragMove={handleCalloutDragMove}
         onCalloutDragStart={handleCalloutDragStart}
         onCalloutDragEnd={handleCalloutDragEnd}
+        onCalloutMouseEnter={handleCalloutMouseEnter}
+        onCalloutMouseLeave={handleCalloutMouseLeave}
       />
     </>
   )
 }
 
-export const IssuePin = memo(IssuePinComponent)
+function areIssuePinPropsEqual(prev: IssuePinProps, next: IssuePinProps): boolean {
+  if (prev.stageWidth !== next.stageWidth) return false
+  if (prev.stageHeight !== next.stageHeight) return false
+  if (prev.isSelected !== next.isSelected) return false
+  if (prev.canDrag !== next.canDrag) return false
+  if (prev.issue.id !== next.issue.id) return false
+  if (prev.issue.no !== next.issue.no) return false
+  if (prev.issue.pin_x !== next.issue.pin_x) return false
+  if (prev.issue.pin_y !== next.issue.pin_y) return false
+  if (prev.issue.callout_x !== next.issue.callout_x) return false
+  if (prev.issue.callout_y !== next.issue.callout_y) return false
+  if (prev.issue.status !== next.issue.status) return false
+  if (prev.issue.issue_text !== next.issue.issue_text) return false
+  if (prev.issue.issue_type !== next.issue.issue_type) return false
+  if (prev.issue.issue_category !== next.issue.issue_category) return false
+  if (prev.issue.contractor_id !== next.issue.contractor_id) return false
+  if (prev.issue.contractor?.name !== next.issue.contractor?.name) return false
+  if (prev.issue.before_photo_path !== next.issue.before_photo_path) return false
+  if (prev.issue.after_photo_path !== next.issue.after_photo_path) return false
+  if (prev.issue.before_photo_url !== next.issue.before_photo_url) return false
+  if (prev.issue.after_photo_url !== next.issue.after_photo_url) return false
+
+  const prevDrag = prev.dragOverride
+  const nextDrag = next.dragOverride
+  if (prevDrag?.pin_x !== nextDrag?.pin_x) return false
+  if (prevDrag?.pin_y !== nextDrag?.pin_y) return false
+  if (prevDrag?.callout_x !== nextDrag?.callout_x) return false
+  if (prevDrag?.callout_y !== nextDrag?.callout_y) return false
+
+  return true
+}
+
+export const IssuePin = memo(IssuePinComponent, areIssuePinPropsEqual)
