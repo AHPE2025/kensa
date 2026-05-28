@@ -38,6 +38,8 @@ interface DrawingToolbarProps {
   onPrevDrawing: () => void
   onNextDrawing: () => void
   onRotate: () => void
+  zoomSaving?: boolean
+  rotationSaving?: boolean
 }
 
 export function DrawingToolbar({
@@ -56,6 +58,8 @@ export function DrawingToolbar({
   onPrevDrawing,
   onNextDrawing,
   onRotate,
+  zoomSaving = false,
+  rotationSaving = false,
 }: DrawingToolbarProps) {
   const displayIndex = currentDrawingIndex >= 0 ? currentDrawingIndex + 1 : 1
   const displayTotal = totalDrawings > 0 ? totalDrawings : 1
@@ -109,21 +113,39 @@ export function DrawingToolbar({
 
       {/* Zoom */}
       <div className="flex items-center gap-1">
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onZoomOut}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          disabled={zoomSaving}
+          onClick={onZoomOut}
+        >
           <ZoomOut className="h-4 w-4" />
         </Button>
         <span className="text-xs font-mono text-muted-foreground min-w-[40px] text-center">
-          {Math.round(zoom * 100)}%
+          {zoomSaving ? '保存中' : `${Math.round(zoom * 100)}%`}
         </span>
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onZoomIn}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          disabled={zoomSaving}
+          onClick={onZoomIn}
+        >
           <ZoomIn className="h-4 w-4" />
         </Button>
       </div>
 
       <div className="h-6 w-px bg-border" />
-      <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={onRotate}>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-9 gap-1.5"
+        disabled={rotationSaving}
+        onClick={onRotate}
+      >
         <RefreshCw className="h-4 w-4" />
-        {rotation}°
+        {rotationSaving ? '回転保存中' : `${rotation}°`}
       </Button>
 
       <ToggleGroup

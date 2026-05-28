@@ -26,6 +26,7 @@ import {
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
+import { normalizeRotation, normalizeZoom, MAX_ZOOM } from '@/lib/drawing-view-settings'
 import { ISSUE_TYPES, sortDrawingsByFloorLabel, type Contractor, type Drawing, type Issue, type IssueFormValues, type IssueTypeContractorMapping, type Project } from '@/lib/domain'
 import { normalizeIssueStatus } from '@/lib/issue-status'
 import { buildIssueSaveCategory, buildIssueTypeOptions } from '@/lib/issue-type-mapping'
@@ -85,24 +86,9 @@ const FALLBACK_CONTRACTORS: Contractor[] = FALLBACK_CONTRACTOR_NAMES.map((name, 
 const UNASSIGNED_CONTRACTOR_KEY = '__none__'
 
 const MIN_ZOOM = 0.5
-const MAX_ZOOM = 2.5
-const ZOOM_SAVE_DEBOUNCE_MS = 400
 
-function clampZoom(value: unknown): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) return 1
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, numeric))
-}
-
-function normalizeRotation(value: unknown): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) return 0
-  const normalized = ((numeric % 360) + 360) % 360
-  if (normalized === 360) return 0
-  if (normalized === 0 || normalized === 90 || normalized === 180 || normalized === 270) {
-    return normalized
-  }
-  return 0
+function clampZoom(value: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
 }
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
@@ -131,6 +117,8 @@ export default function DrawingEditorClient() {
   const [imageError, setImageError] = useState<string | null>(null)
   const [pdfPageCount, setPdfPageCount] = useState(0)
   const [rotation, setRotation] = useState(0)
+  const [rotationSaving, setRotationSaving] = useState(false)
+  const [zoomSaving, setZoomSaving] = useState(false)
   const [fitScale, setFitScale] = useState(1)
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
   const [addingPin, setAddingPin] = useState<{ x: number; y: number } | null>(null)
@@ -166,8 +154,6 @@ export default function DrawingEditorClient() {
   >([])
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
-  const zoomSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
   }, [loadingAuth, user, router])
@@ -241,8 +227,10 @@ export default function DrawingEditorClient() {
         : FALLBACK_CONTRACTORS
       console.log('contractors:', resolvedContractors)
 
-      setDrawings(drawingListData.drawings ?? [])
-      const drawingFromList = (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
+      const projectDrawings = drawingListData.drawings ?? []
+      console.log('project drawings:', projectDrawings)
+      setDrawings(projectDrawings)
+      const drawingFromList = projectDrawings.find((item) => item.id === drawingId) ?? null
       const drawing = issueData.drawing
         ? {
             ...drawingFromList,
@@ -270,77 +258,103 @@ export default function DrawingEditorClient() {
     if (user) void loadData()
   }, [user, drawingId, projectId])
 
-  const saveViewSettings = useCallback(
-    async (settings: { rotation?: number; zoom?: number }) => {
-      const payload = {
-        ...(settings.rotation !== undefined ? { rotation: settings.rotation } : {}),
-        ...(settings.zoom !== undefined ? { zoom: settings.zoom } : {}),
-      }
-      if (Object.keys(payload).length === 0) return
-
-      console.log('save drawing view settings:', {
-        drawingId,
-        rotation: settings.rotation,
-        zoom: settings.zoom,
+  const applyDrawingViewSettings = useCallback(
+    (drawing: DrawingRow | null) => {
+      if (!drawing || drawing.id !== drawingId) return
+      const initialRotation = normalizeRotation(drawing.rotation ?? 0)
+      const initialZoom = clampZoom(normalizeZoom(drawing.zoom ?? 1))
+      console.log('current drawing view settings:', {
+        drawingId: drawing.id,
+        rotation: initialRotation,
+        zoom: initialZoom,
       })
+      setRotation(initialRotation)
+      setZoom(initialZoom)
+    },
+    [drawingId, setZoom],
+  )
 
+  const patchDrawingViewSettings = useCallback(
+    async (payload: { rotation?: number; zoom?: number }, targetDrawingId: string) => {
+      const response = await authedFetch(`/api/drawings/${targetDrawingId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = (await response.json()) as {
+        drawing?: Pick<Drawing, 'id' | 'rotation' | 'zoom'>
+        error?: string
+      }
+      if (!response.ok) {
+        throw new Error(data.error ?? '表示設定の保存に失敗しました')
+      }
+      const saved = data.drawing
+      const merged = {
+        ...payload,
+        ...(saved?.rotation !== undefined ? { rotation: saved.rotation } : {}),
+        ...(saved?.zoom !== undefined ? { zoom: saved.zoom } : {}),
+      }
+      setDrawings((prev) =>
+        prev.map((item) => (item.id === targetDrawingId ? { ...item, ...merged } : item)),
+      )
+      setCurrentDrawing((prev) =>
+        prev && prev.id === targetDrawingId ? { ...prev, ...merged } : prev,
+      )
+      return merged
+    },
+    [],
+  )
+
+  const saveDrawingRotation = useCallback(
+    async (nextRotation: number) => {
+      if (rotationSaving) return
+      setRotationSaving(true)
+      console.log('save drawing rotation:', {
+        drawingId,
+        rotation: nextRotation,
+      })
       try {
-        const response = await authedFetch(`/api/drawings/${drawingId}/view-settings`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        const data = (await response.json()) as { error?: string }
-        if (!response.ok) {
-          throw new Error(data.error ?? '表示設定の保存に失敗しました')
-        }
-
-        setDrawings((prev) =>
-          prev.map((item) => (item.id === drawingId ? { ...item, ...payload } : item)),
-        )
-        setCurrentDrawing((prev) => (prev && prev.id === drawingId ? { ...prev, ...payload } : prev))
+        await patchDrawingViewSettings({ rotation: nextRotation }, drawingId)
       } catch (error) {
-        console.error('save drawing view settings error:', error)
+        console.error('save drawing rotation error:', error)
+        toast.error('回転設定の保存に失敗しました')
+      } finally {
+        setRotationSaving(false)
       }
     },
-    [drawingId],
+    [drawingId, patchDrawingViewSettings, rotationSaving],
   )
 
-  const scheduleZoomSave = useCallback(
-    (nextZoom: number) => {
-      if (zoomSaveTimerRef.current) clearTimeout(zoomSaveTimerRef.current)
-      zoomSaveTimerRef.current = setTimeout(() => {
-        void saveViewSettings({ zoom: nextZoom })
-      }, ZOOM_SAVE_DEBOUNCE_MS)
+  const saveDrawingZoom = useCallback(
+    async (nextZoom: number) => {
+      if (zoomSaving) return
+      setZoomSaving(true)
+      console.log('save drawing zoom:', {
+        drawingId,
+        zoom: nextZoom,
+      })
+      try {
+        await patchDrawingViewSettings({ zoom: nextZoom }, drawingId)
+      } catch (error) {
+        console.error('save drawing zoom error:', error)
+        toast.error('ズーム設定の保存に失敗しました')
+      } finally {
+        setZoomSaving(false)
+      }
     },
-    [saveViewSettings],
+    [drawingId, patchDrawingViewSettings, zoomSaving],
   )
 
   useEffect(() => {
-    return () => {
-      if (zoomSaveTimerRef.current) clearTimeout(zoomSaveTimerRef.current)
-    }
-  }, [])
+    const drawing =
+      drawings.find((item) => item.id === drawingId) ??
+      (currentDrawing?.id === drawingId ? currentDrawing : null)
+    applyDrawingViewSettings(drawing)
+  }, [drawingId, drawings, currentDrawing, applyDrawingViewSettings])
 
   useEffect(() => {
-    if (zoomSaveTimerRef.current) {
-      clearTimeout(zoomSaveTimerRef.current)
-      zoomSaveTimerRef.current = null
-    }
-    if (!currentDrawing || currentDrawing.id !== drawingId) return
-
-    const initialRotation = normalizeRotation(currentDrawing.rotation ?? 0)
-    const initialZoom = clampZoom(currentDrawing.zoom ?? 1)
-
-    console.log('initial drawing view settings:', {
-      rotation: currentDrawing?.rotation,
-      zoom: currentDrawing?.zoom,
-    })
-
-    setRotation(initialRotation)
-    setZoom(initialZoom)
     setPan({ x: 0, y: 0 })
-  }, [currentDrawing, drawingId, setZoom, setPan])
+  }, [drawingId, setPan])
 
   useEffect(() => {
     if (!currentDrawing) return
@@ -1081,6 +1095,8 @@ export default function DrawingEditorClient() {
         mode={mode}
         zoom={zoom}
         rotation={rotation}
+        rotationSaving={rotationSaving}
+        zoomSaving={zoomSaving}
         onBack={() => router.push(`/projects/${projectId}`)}
         onChangeDrawing={(floorLabel) => {
           const drawing = sortedDrawings.find((item) => item.floor_label === floorLabel)
@@ -1092,14 +1108,14 @@ export default function DrawingEditorClient() {
         }}
         onChangeMode={setMode}
         onZoomIn={() => {
-          const nextZoom = Math.min(MAX_ZOOM, zoom + 0.1)
+          const nextZoom = clampZoom(zoom + 0.1)
           setZoom(nextZoom)
-          scheduleZoomSave(nextZoom)
+          void saveDrawingZoom(nextZoom)
         }}
         onZoomOut={() => {
-          const nextZoom = Math.max(MIN_ZOOM, zoom - 0.1)
+          const nextZoom = clampZoom(zoom - 0.1)
           setZoom(nextZoom)
-          scheduleZoomSave(nextZoom)
+          void saveDrawingZoom(nextZoom)
         }}
         onPrevDrawing={() => {
           if (prevDrawing) {
@@ -1114,7 +1130,7 @@ export default function DrawingEditorClient() {
         onRotate={() => {
           const nextRotation = (rotation + 90) % 360
           setRotation(nextRotation)
-          void saveViewSettings({ rotation: nextRotation })
+          void saveDrawingRotation(nextRotation)
         }}
       />
       <div className="flex min-h-0 flex-1">

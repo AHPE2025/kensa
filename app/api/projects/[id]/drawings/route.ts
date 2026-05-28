@@ -18,7 +18,9 @@ export async function GET(request: NextRequest, { params }: Params) {
 
   const { data: drawings, error } = await client
     .from('drawings')
-    .select('*')
+    .select(
+      'id, tenant_id, project_id, floor_label, file_path, page_count, rotation, zoom, original_pdf_path, page_images, file_name, created_at',
+    )
     .eq('project_id', id)
     .eq('tenant_id', tenantId)
     .order('created_at', { ascending: true })
@@ -50,6 +52,8 @@ export async function GET(request: NextRequest, { params }: Params) {
   for (const idValue of drawingIds) countMap.set(idValue, 0)
   for (const issue of issues ?? []) countMap.set(issue.drawing_id, (countMap.get(issue.drawing_id) ?? 0) + 1)
 
+  console.log('project drawings:', drawings ?? [])
+
   const rows = await Promise.all(
     (drawings ?? []).map(async (d) => {
       const pageImages = Array.isArray(d.page_images) ? (d.page_images as string[]) : []
@@ -63,7 +67,7 @@ export async function GET(request: NextRequest, { params }: Params) {
         ...d,
         issue_count: countMap.get(d.id) ?? 0,
         signed_url: signed?.signedUrl ?? null,
-        storage_path: d.storage_path ?? d.original_pdf_path ?? d.file_path ?? null,
+        storage_path: d.original_pdf_path ?? d.file_path ?? null,
         file_name:
           d.file_name ??
           ((d.original_pdf_path ?? d.file_path ?? '')

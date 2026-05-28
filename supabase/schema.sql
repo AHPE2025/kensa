@@ -47,6 +47,8 @@ create table if not exists public.drawings (
 alter table public.drawings add column if not exists original_pdf_path text;
 alter table public.drawings add column if not exists page_images text[] not null default '{}';
 alter table public.drawings add column if not exists file_name text;
+alter table public.drawings add column if not exists rotation integer not null default 0;
+alter table public.drawings add column if not exists zoom double precision not null default 1;
 
 create table if not exists public.issues (
   id uuid primary key default gen_random_uuid(),
