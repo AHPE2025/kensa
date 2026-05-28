@@ -52,13 +52,20 @@ export async function POST(request: NextRequest) {
   const body = (await request.json()) as {
     tenant_id?: string
     name?: string
-    address?: string
+    address?: string | null
     inspection_date?: string
   }
 
-  if (!body.tenant_id || !body.name || !body.address || !body.inspection_date) {
+  console.log('create project request body:', body)
+
+  const missing: string[] = []
+  if (!body.tenant_id) missing.push('tenant_id')
+  if (!body.name?.trim()) missing.push('name')
+  if (!body.inspection_date) missing.push('inspection_date')
+
+  if (missing.length > 0) {
     return NextResponse.json(
-      { error: 'tenant_id,name,address,inspection_date は必須です' },
+      { error: 'tenant_id,name,inspection_date は必須です', missing },
       { status: 400 }
     )
   }
@@ -70,12 +77,17 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  const address =
+    body.address === undefined || body.address === null
+      ? null
+      : body.address.trim() || null
+
   const { data, error } = await client
     .from('projects')
     .insert({
       tenant_id: body.tenant_id,
-      name: body.name.trim(),
-      address: body.address.trim(),
+      name: body.name!.trim(),
+      address,
       inspection_date: body.inspection_date,
     })
     .select('*')

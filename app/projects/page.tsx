@@ -34,7 +34,7 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name: '', address: '', inspection_date: '' })
+  const [form, setForm] = useState({ name: '', inspection_date: '' })
 
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
@@ -61,12 +61,23 @@ export default function ProjectsPage() {
     const key = search.trim().toLowerCase()
     if (!key) return projects
     return projects.filter(
-      (p) => p.name.toLowerCase().includes(key) || p.address.toLowerCase().includes(key)
+      (p) =>
+        p.name.toLowerCase().includes(key) || (p.address ?? '').toLowerCase().includes(key)
     )
   }, [projects, search])
 
   const onCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+
+    if (!form.name.trim()) {
+      toast.error('物件名を入力してください')
+      return
+    }
+    if (!form.inspection_date) {
+      toast.error('検査日を選択してください')
+      return
+    }
+
     setSaving(true)
     try {
       const supabase = getSupabaseBrowserClient()
@@ -88,15 +99,17 @@ export default function ProjectsPage() {
         return
       }
 
+      const payload = {
+        tenant_id: tenantId,
+        name: form.name.trim(),
+        inspection_date: form.inspection_date,
+      }
+      console.log('create project payload:', payload)
+
       const response = await authedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          name: form.name,
-          address: form.address,
-          inspection_date: form.inspection_date,
-        }),
+        body: JSON.stringify(payload),
       })
       const data = (await response.json()) as { error?: string }
       if (!response.ok) {
@@ -106,9 +119,8 @@ export default function ProjectsPage() {
         setSaving(false)
         return
       }
-      console.log('project created')
       toast.success('案件を作成しました')
-      setForm({ name: '', address: '', inspection_date: '' })
+      setForm({ name: '', inspection_date: '' })
       setDialogOpen(false)
       await loadProjects()
     } catch (error) {
@@ -149,18 +161,8 @@ export default function ProjectsPage() {
                   <Label htmlFor="name">物件名</Label>
                   <Input
                     id="name"
-                    required
                     value={form.name}
                     onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="address">住所</Label>
-                  <Input
-                    id="address"
-                    required
-                    value={form.address}
-                    onChange={(event) => setForm((prev) => ({ ...prev, address: event.target.value }))}
                   />
                 </div>
                 <div className="space-y-2">
@@ -168,7 +170,6 @@ export default function ProjectsPage() {
                   <Input
                     id="inspection_date"
                     type="date"
-                    required
                     value={form.inspection_date}
                     onChange={(event) =>
                       setForm((prev) => ({ ...prev, inspection_date: event.target.value }))
@@ -215,10 +216,12 @@ export default function ProjectsPage() {
                 <CardTitle className="text-xl">{project.name}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <p className="flex items-center gap-2 text-muted-foreground">
-                  <MapPin className="h-4 w-4" />
-                  {project.address}
-                </p>
+                {project.address?.trim() ? (
+                  <p className="flex items-center gap-2 text-muted-foreground">
+                    <MapPin className="h-4 w-4" />
+                    {project.address}
+                  </p>
+                ) : null}
                 <p className="flex items-center gap-2">
                   <CalendarDays className="h-4 w-4 text-muted-foreground" />
                   検査日: {project.inspection_date}

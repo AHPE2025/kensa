@@ -34,7 +34,7 @@ export interface Drawing {
 export interface Project {
   id: string
   name: string
-  address: string
+  address: string | null
   inspectionDate: string
   totalIssues: number
   unresolvedIssues: number

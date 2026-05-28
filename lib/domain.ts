@@ -37,7 +37,7 @@ export type Profile = {
 export type ProjectSummary = {
   id: string
   name: string
-  address: string
+  address: string | null
   inspection_date: string
   created_at: string
   issue_count: number
@@ -49,7 +49,7 @@ export type Project = {
   id: string
   tenant_id: string
   name: string
-  address: string
+  address: string | null
   inspection_date: string
   created_at: string
 }

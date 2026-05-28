@@ -61,7 +61,9 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
           </Button>
           <div className="flex-1">
             <h1 className="text-lg font-bold text-foreground">{project.name}</h1>
-            <p className="text-xs text-muted-foreground">{project.address}</p>
+            {project.address?.trim() ? (
+              <p className="text-xs text-muted-foreground">{project.address}</p>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-xs">

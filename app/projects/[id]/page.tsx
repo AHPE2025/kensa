@@ -221,7 +221,9 @@ export default function ProjectDetailPage() {
           </Button>
           <div>
             <h1 className="text-xl font-bold">{project.name}</h1>
-            <p className="text-sm text-muted-foreground">{project.address}</p>
+            {project.address?.trim() ? (
+              <p className="text-sm text-muted-foreground">{project.address}</p>
+            ) : null}
           </div>
         </div>
       </header>

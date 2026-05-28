@@ -24,7 +24,7 @@ export function ProjectsPage() {
 
   const filtered = projects.filter(
     (p) =>
-      p.name.includes(search) || p.address.includes(search)
+      p.name.includes(search) || (p.address ?? '').includes(search)
   )
 
   return (
@@ -89,10 +89,12 @@ export function ProjectsPage() {
                 </div>
 
                 <div className="flex flex-col gap-2 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-3.5 w-3.5 shrink-0" />
-                    <span>{project.address}</span>
-                  </div>
+                  {project.address?.trim() ? (
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-3.5 w-3.5 shrink-0" />
+                      <span>{project.address}</span>
+                    </div>
+                  ) : null}
                   <div className="flex items-center gap-2">
                     <CalendarDays className="h-3.5 w-3.5 shrink-0" />
                     <span>検査日: {project.inspectionDate}</span>

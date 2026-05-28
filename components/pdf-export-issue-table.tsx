@@ -7,7 +7,7 @@ export type NumberedIssue = Issue & { no: number }
 export type PdfExportIssueTableProps = {
   title: string
   projectName: string
-  address: string
+  address?: string | null
   inspectionDate: string
   exportDate: string
   badgeLabel: string
@@ -84,7 +84,9 @@ export function PdfExportIssueTable({
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">{title}</h1>
             <p className="mt-2 text-base font-medium text-slate-800">{projectName}</p>
-            <p className="mt-1 text-sm text-slate-600">{address}</p>
+            {address?.trim() ? (
+              <p className="mt-1 text-sm text-slate-600">{address}</p>
+            ) : null}
           </div>
           <div className="text-right">
             <p className="text-sm text-slate-600">検査日：{inspectionDate}</p>
