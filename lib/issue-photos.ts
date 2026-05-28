@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ISSUE_PHOTO_ACCEPT } from '@/lib/issue-photo-api'
 import {
   buildIssuePhotoPath,
   createTempIssueFolderId,
-  ISSUE_PHOTO_ACCEPT,
 } from '@/lib/issue-photo-paths'
+import { createSupabaseAdmin } from '@/lib/supabaseAdmin'
 import { DRAWING_SIGNED_URL_TTL_SECONDS, ISSUE_PHOTOS_BUCKET } from '@/lib/storage'
 
 export { ISSUE_PHOTO_ACCEPT, buildIssuePhotoPath, createTempIssueFolderId }
@@ -38,7 +39,7 @@ export async function uploadIssuePhotoFile(
 }
 
 export async function createIssuePhotoSignedUrl(
-  client: SupabaseClient,
+  _client: SupabaseClient,
   path: string | null | undefined,
   kind?: 'before' | 'after',
 ) {
@@ -48,7 +49,8 @@ export async function createIssuePhotoSignedUrl(
   } else if (kind === 'after') {
     console.log('create after photo signed url:', path)
   }
-  const { data, error } = await client.storage
+  const admin = createSupabaseAdmin()
+  const { data, error } = await admin.storage
     .from(ISSUE_PHOTOS_BUCKET)
     .createSignedUrl(path, DRAWING_SIGNED_URL_TTL_SECONDS)
   if (error) {

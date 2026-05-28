@@ -18,10 +18,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { authedFetch } from '@/lib/authed-fetch'
-import { createTempIssueFolderId, resolvePhotoUploadTenantId } from '@/lib/issue-photo-paths'
+import { resolvePhotoUploadTenantId } from '@/lib/issue-photo-paths'
 import {
   attachIssuePhotoDisplayUrlsClient,
-  uploadIssuePhotoFromClient,
+  deleteIssuePhotoViaApi,
+  formatIssuePhotoUploadError,
+  uploadIssuePhotosViaApi,
 } from '@/lib/issue-photos-client'
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useEditorStore } from '@/lib/stores/editor-store'
@@ -625,70 +627,6 @@ export default function DrawingEditorClient() {
     [profileTenantId, project?.tenant_id],
   )
 
-  const uploadIssuePhotosForSave = useCallback(
-    async (params: {
-      tenantId: string
-      projectId: string
-      drawingId: string
-      folderId: string
-      beforePhotoFile: File | null
-      afterPhotoFile: File | null
-    }): Promise<{ beforePhotoPath: string | null; afterPhotoPath: string | null } | null> => {
-      const { tenantId, projectId: resolvedProjectId, drawingId: resolvedDrawingId, folderId, beforePhotoFile, afterPhotoFile } =
-        params
-
-      console.log('photo upload ids:', {
-        tenantId,
-        projectId: resolvedProjectId,
-        drawingId: resolvedDrawingId,
-      })
-
-      let beforePhotoPath: string | null = null
-      let afterPhotoPath: string | null = null
-
-      if (beforePhotoFile) {
-        try {
-          beforePhotoPath = await uploadIssuePhotoFromClient(
-            tenantId,
-            resolvedProjectId,
-            resolvedDrawingId,
-            folderId,
-            'before',
-            beforePhotoFile,
-          )
-          console.log('before photo uploaded:', beforePhotoPath)
-        } catch (error) {
-          console.error('before photo upload error:', error)
-          console.error('photo upload error:', error)
-          toast.error('ビフォー写真のアップロードに失敗しました')
-          return null
-        }
-      }
-
-      if (afterPhotoFile) {
-        try {
-          afterPhotoPath = await uploadIssuePhotoFromClient(
-            tenantId,
-            resolvedProjectId,
-            resolvedDrawingId,
-            folderId,
-            'after',
-            afterPhotoFile,
-          )
-          console.log('after photo uploaded:', afterPhotoPath)
-        } catch (error) {
-          console.error('after photo upload error:', error)
-          console.error('photo upload error:', error)
-          toast.error('アフター写真のアップロードに失敗しました')
-          return null
-        }
-      }
-
-      return { beforePhotoPath, afterPhotoPath }
-    },
-    [],
-  )
-
   const createIssue = useCallback(
     async (values: IssueFormValues, continueMode: boolean) => {
       if (!addingPin || !currentDrawing) return
@@ -697,34 +635,6 @@ export default function DrawingEditorClient() {
         const afterPhotoFile = values.afterPhotoFile
         console.log('before photo file:', beforePhotoFile)
         console.log('after photo file:', afterPhotoFile)
-
-        let beforePhotoPath: string | null = null
-        let afterPhotoPath: string | null = null
-
-        if (beforePhotoFile || afterPhotoFile) {
-          const tenantId = resolveIssuePhotoTenantId(currentDrawing.tenant_id)
-          if (!tenantId || !projectId || !drawingId) {
-            console.error('photo upload missing ids:', {
-              tenantId,
-              projectId,
-              drawingId,
-            })
-            toast.error('写真保存に必要な情報が不足しています')
-            return
-          }
-
-          const uploadResult = await uploadIssuePhotosForSave({
-            tenantId,
-            projectId,
-            drawingId,
-            folderId: createTempIssueFolderId(),
-            beforePhotoFile,
-            afterPhotoFile,
-          })
-          if (!uploadResult) return
-          beforePhotoPath = uploadResult.beforePhotoPath
-          afterPhotoPath = uploadResult.afterPhotoPath
-        }
 
         const payload = {
           tenant_id:
@@ -745,8 +655,8 @@ export default function DrawingEditorClient() {
           callout_x: Math.min(1, Math.max(0, addingPin.x + 0.05)),
           callout_y: Math.min(1, Math.max(0, addingPin.y - 0.05)),
           status: normalizeIssueStatus(values.status || '未対応'),
-          before_photo_path: beforePhotoPath,
-          after_photo_path: afterPhotoPath,
+          before_photo_path: null,
+          after_photo_path: null,
         }
         console.log('normalized issue status:', payload.status)
         console.log('issue payload with mapping:', payload)
@@ -770,8 +680,54 @@ export default function DrawingEditorClient() {
           toast.error(errorMessage)
           return
         }
+
+        const issueId = data.issue.id
+        const resolvedProjectId = data.issue.project_id || projectId
+
+        if (beforePhotoFile || afterPhotoFile) {
+          if (!resolvedProjectId) {
+            toast.error('写真保存に必要な案件情報が不足しています')
+            return
+          }
+
+          const uploadResult = await uploadIssuePhotosViaApi({
+            projectId: resolvedProjectId,
+            issueId,
+            beforePhotoFile,
+            afterPhotoFile,
+          })
+
+          if (!uploadResult.ok) {
+            toast.error(formatIssuePhotoUploadError(uploadResult))
+            await refetchIssues()
+            setSelectedIssueId(issueId)
+            return
+          }
+
+          const photoPayload: Record<string, string | null> = {}
+          if (uploadResult.beforePhotoPath) {
+            photoPayload.before_photo_path = uploadResult.beforePhotoPath
+          }
+          if (uploadResult.afterPhotoPath) {
+            photoPayload.after_photo_path = uploadResult.afterPhotoPath
+          }
+
+          if (Object.keys(photoPayload).length > 0) {
+            const patchResponse = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(photoPayload),
+            })
+            const patchData = await parseApiResponse<{ issue?: Issue; error?: string }>(patchResponse)
+            if (!patchResponse.ok || !patchData.issue) {
+              console.error('issue photo path update error:', patchData)
+              toast.error('指摘は保存しましたが、写真パスの更新に失敗しました')
+            }
+          }
+        }
+
         await refetchIssues()
-        setSelectedIssueId(data.issue.id)
+        setSelectedIssueId(issueId)
         setAddingPin(null)
         setIssueModalOpen(false)
         toast.success('指摘を保存しました')
@@ -794,7 +750,6 @@ export default function DrawingEditorClient() {
       refetchIssues,
       resolveIssuePhotoTenantId,
       setMode,
-      uploadIssuePhotosForSave,
     ],
   )
 
@@ -806,46 +761,52 @@ export default function DrawingEditorClient() {
         console.log('before photo file:', beforePhotoFile)
         console.log('after photo file:', afterPhotoFile)
 
+        const resolvedProjectId = targetIssue.project_id || projectId
+        if (!resolvedProjectId) {
+          toast.error('写真保存に必要な案件情報が不足しています')
+          return
+        }
+
         let beforePhotoPath = targetIssue.before_photo_path ?? null
         let afterPhotoPath = targetIssue.after_photo_path ?? null
+        const oldBeforePath = beforePhotoPath
+        const oldAfterPath = afterPhotoPath
 
         if (values.clearBeforePhoto) {
+          if (oldBeforePath) {
+            await deleteIssuePhotoViaApi(oldBeforePath)
+          }
           beforePhotoPath = null
         }
         if (values.clearAfterPhoto) {
+          if (oldAfterPath) {
+            await deleteIssuePhotoViaApi(oldAfterPath)
+          }
           afterPhotoPath = null
         }
 
         if (beforePhotoFile || afterPhotoFile) {
-          const tenantId = resolveIssuePhotoTenantId(
-            targetIssue.tenant_id ?? currentDrawing?.tenant_id,
-          )
-          const resolvedProjectId = targetIssue.project_id || projectId
-          const resolvedDrawingId = targetIssue.drawing_id || drawingId
-          if (!tenantId || !resolvedProjectId || !resolvedDrawingId) {
-            console.error('photo upload missing ids:', {
-              tenantId,
-              projectId: resolvedProjectId,
-              drawingId: resolvedDrawingId,
-            })
-            toast.error('写真保存に必要な情報が不足しています')
-            return
-          }
-
-          const uploadResult = await uploadIssuePhotosForSave({
-            tenantId,
+          const uploadResult = await uploadIssuePhotosViaApi({
             projectId: resolvedProjectId,
-            drawingId: resolvedDrawingId,
-            folderId: targetIssue.id,
+            issueId: targetIssue.id,
             beforePhotoFile,
             afterPhotoFile,
           })
-          if (!uploadResult) return
+          if (!uploadResult.ok) {
+            toast.error(formatIssuePhotoUploadError(uploadResult))
+            return
+          }
 
-          if (beforePhotoFile) {
+          if (beforePhotoFile && uploadResult.beforePhotoPath) {
+            if (oldBeforePath && oldBeforePath !== uploadResult.beforePhotoPath) {
+              await deleteIssuePhotoViaApi(oldBeforePath)
+            }
             beforePhotoPath = uploadResult.beforePhotoPath
           }
-          if (afterPhotoFile) {
+          if (afterPhotoFile && uploadResult.afterPhotoPath) {
+            if (oldAfterPath && oldAfterPath !== uploadResult.afterPhotoPath) {
+              await deleteIssuePhotoViaApi(oldAfterPath)
+            }
             afterPhotoPath = uploadResult.afterPhotoPath
           }
         }
@@ -902,14 +863,11 @@ export default function DrawingEditorClient() {
     },
     [
       currentDrawing?.floor_label,
-      currentDrawing?.tenant_id,
       drawingId,
       isFallbackContractor,
       parseApiResponse,
       projectId,
       refetchIssues,
-      resolveIssuePhotoTenantId,
-      uploadIssuePhotosForSave,
     ],
   )
 
