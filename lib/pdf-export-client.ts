@@ -47,13 +47,11 @@ function formatExportTimestamp(date: Date): string {
 }
 
 export function isCommonIssue(issue: Issue): boolean {
-  if (issue.issue_category === 'common') return true
-  if (issue.contractor?.name === '共通') return true
-  return false
+  return issue.issue_category === 'common'
 }
 
 export function isUnassignedIssue(issue: Issue): boolean {
-  return issue.contractor_id === null && !isCommonIssue(issue)
+  return !issue.contractor_id && issue.issue_category !== 'common'
 }
 
 export { issueStatusLabel, normalizeIssueStatus, type IssueStatus } from '@/lib/issue-status'

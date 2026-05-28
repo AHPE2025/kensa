@@ -490,16 +490,24 @@ export default function DrawingEditorClient() {
         commonIssues,
         drawingIssues,
         photoDetailIssues,
-        separateCommonPage,
         selectedContractor,
         exportContractorLabel,
       } = pdfExportSplit
 
       console.log('pdf selected contractor:', selectedContractor)
+      console.log('pdf selected floor:', 'all')
       console.log('pdf selected issues:', pdfExportSplit.selectedIssues)
       console.log('pdf common issues:', commonIssues)
       console.log('pdf drawing issues:', drawingIssues)
-      console.log('pdf photo detail issues:', photoDetailIssues)
+      console.log('pdf common issue count:', commonIssues.length)
+
+      console.log('pdf export with common issues:', {
+        selectedContractor: exportContractorLabel,
+        selectedFloor: 'all',
+        selectedIssues: pdfExportSplit.selectedIssues,
+        commonIssues,
+        drawingIssues,
+      })
 
       const selectedTableTarget = selectedTableExportRef.current
       if (!selectedTableTarget) {
@@ -534,7 +542,7 @@ export default function DrawingEditorClient() {
       const selectedTableImage = await captureElement(selectedTableTarget)
 
       let commonTableImage: string | null = null
-      if (separateCommonPage && commonIssues.length > 0) {
+      if (commonIssues.length > 0) {
         const commonTableTarget = commonTableExportRef.current
         if (!commonTableTarget) {
           throw new Error('共通指摘一覧表の出力対象が見つかりません')
@@ -578,13 +586,14 @@ export default function DrawingEditorClient() {
         includeLists: true,
         includeDrawing: exportContentType === 'drawing_and_list',
         includePhotoDetail: photoDetailImages.length > 0,
-        hasCommonPage: separateCommonPage && commonIssues.length > 0,
+        hasCommonPage: commonIssues.length > 0,
       })
 
       downloadPdfBlob(blob, filename)
       console.log('pdf export done')
       toast.success(`${exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
+      console.error('pdf common issue handling error:', error)
       console.error('pdf export error:', error)
       setExportError('PDF出力に失敗しました')
       toast.error('PDF出力に失敗しました')
@@ -1252,7 +1261,7 @@ export default function DrawingEditorClient() {
                           />
                         </div>
                       </div>
-                      {pdfExportSplit.separateCommonPage && pdfExportSplit.commonIssues.length > 0 ? (
+                      {pdfExportSplit.commonIssues.length > 0 ? (
                         <div className="overflow-hidden rounded border bg-slate-50">
                           <div className="origin-top-left scale-[0.22]" style={{ width: 1122 }}>
                             <PdfExportIssueTable
@@ -1447,7 +1456,7 @@ export default function DrawingEditorClient() {
             issues={pdfExportSplit.selectedIssues}
           />
         </div>
-        {pdfExportSplit.separateCommonPage && pdfExportSplit.commonIssues.length > 0 ? (
+        {pdfExportSplit.commonIssues.length > 0 ? (
           <div ref={commonTableExportRef}>
             <PdfExportIssueTable
               title="共通指摘一覧表"

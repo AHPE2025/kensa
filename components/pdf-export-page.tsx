@@ -322,13 +322,6 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
   const pinsToRender = exportDrawingPageIssues
 
-  const targetIssues = useMemo(
-    () => [...pdfExportSplit.selectedIssues, ...pdfExportSplit.commonIssues],
-    [pdfExportSplit.selectedIssues, pdfExportSplit.commonIssues],
-  )
-
-  const targetIssueCount = targetIssues.length
-
   const photoDetailIssuesForPreview = useMemo(() => {
     return mergePhotoSignedUrls(
       pdfExportSplit.photoDetailIssues,
@@ -367,12 +360,13 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   }, [contractorSelectValue, selectedFloor, exportContentType])
 
   useEffect(() => {
-    console.log('pdf selected contractor:', pdfExportSplit.selectedContractor)
+    console.log('pdf selected contractor:', contractorSelectValue)
+    console.log('pdf selected floor:', selectedFloor)
     console.log('pdf selected issues:', pdfExportSplit.selectedIssues)
     console.log('pdf common issues:', pdfExportSplit.commonIssues)
     console.log('pdf drawing issues:', pdfExportSplit.drawingIssues)
-    console.log('pdf photo detail issues:', pdfExportSplit.photoDetailIssues)
-  }, [pdfExportSplit])
+    console.log('pdf common issue count:', pdfExportSplit.commonIssues.length)
+  }, [contractorSelectValue, pdfExportSplit, selectedFloor])
 
   const handleContractorChange = (value: string) => {
     if (value === 'all') {
@@ -406,7 +400,6 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       setIsExporting(true)
 
       const {
-        separateCommonPage,
         commonIssues,
         drawingIssues,
         selectedIssues,
@@ -414,12 +407,9 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         photoDetailIssues,
       } = pdfExportSplit
 
-      console.log('pdf export clicked:', {
-        projectId,
-        drawingId: drawing?.id ?? drawingId,
+      console.log('pdf export with common issues:', {
         selectedContractor: contractorSelectValue,
         selectedFloor,
-        exportContentType,
         selectedIssues,
         commonIssues,
         drawingIssues,
@@ -457,7 +447,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         includeLists && selectedTableTarget ? await captureElement(selectedTableTarget) : null
 
       let commonTableImage: string | null = null
-      if (includeLists && separateCommonPage && commonIssues.length > 0) {
+      if (includeLists && commonIssues.length > 0) {
         const commonTableTarget = commonTableExportRef.current
         if (!commonTableTarget) {
           throw new Error('共通指摘一覧表の出力対象が見つかりません')
@@ -495,13 +485,14 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         includeLists,
         includeDrawing,
         includePhotoDetail,
-        hasCommonPage: includeLists && separateCommonPage && commonIssues.length > 0,
+        hasCommonPage: includeLists && commonIssues.length > 0,
       })
 
       downloadPdfBlob(blob, filename)
       console.log('pdf export done')
       toast.success(`${exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
+      console.error('pdf common issue handling error:', error)
       console.error('pdf export page error:', error)
       toast.error('PDF出力に失敗しました')
     } finally {
@@ -690,8 +681,18 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                   </div>
                   <div>
                     <dt className="text-muted-foreground">指摘件数</dt>
-                    <dd className="text-lg font-bold text-foreground">{targetIssueCount}件</dd>
+                    <dd className="text-lg font-bold text-foreground">
+                      {pdfExportSplit.selectedIssues.length}件
+                    </dd>
                   </div>
+                  {exportTarget !== 'common' ? (
+                    <div>
+                      <dt className="text-muted-foreground">共通指摘</dt>
+                      <dd className="font-medium text-foreground">
+                        {pdfExportSplit.commonIssues.length}件
+                      </dd>
+                    </div>
+                  ) : null}
                 </dl>
               </CardContent>
             </Card>

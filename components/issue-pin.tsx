@@ -6,7 +6,7 @@ import type Konva from 'konva'
 import type { Issue } from '@/lib/domain'
 import { normalizeIssueStatus } from '@/lib/issue-status'
 
-type NumberedIssue = Issue & { no: number }
+type NumberedIssue = Issue & { no: number; exportNo?: number }
 
 export type DragOverride = {
   pin_x?: number
@@ -69,6 +69,7 @@ function IssuePinMarker({
   pinX,
   pinY,
   pinColor,
+  displayNo,
   isSelected,
   isDragging,
   canDrag,
@@ -84,6 +85,7 @@ function IssuePinMarker({
   pinX: number
   pinY: number
   pinColor: string
+  displayNo: number
   isSelected: boolean
   isDragging: boolean
   canDrag: boolean
@@ -145,7 +147,7 @@ function IssuePinMarker({
         fontSize={10}
         fontStyle="bold"
         fill="#ffffff"
-        text={String(issue.no)}
+        text={String(displayNo)}
         listening={false}
       />
     </Group>
@@ -292,9 +294,10 @@ function IssuePinComponent({
   const calloutBg = isSelected ? '#eff6ff' : isDone ? '#f0fdf4' : '#fff7ed'
   const calloutStroke = isSelected ? '#2563eb' : pinColor
   const calloutStrokeWidth = isSelected ? 2.5 : 1
+  const pinNo = pdfExportMode ? (issue.exportNo ?? issue.no) : issue.no
   const shortText = issue.issue_text?.trim() ? issue.issue_text.slice(0, 24) : '未入力'
   const calloutText = pdfExportMode
-    ? [`#${issue.no} ${issue.issue_type}`, shortText].filter(Boolean).join('\n')
+    ? [`#${pinNo} ${issue.issue_type}`, shortText].filter(Boolean).join('\n')
     : (() => {
         const contractorLabel =
           issue.issue_category === 'common' ? '共通指摘' : issue.contractor?.name ?? '業者未定'
@@ -431,6 +434,7 @@ function IssuePinComponent({
         pinX={displayPinX}
         pinY={displayPinY}
         pinColor={pinColor}
+        displayNo={pinNo}
         isSelected={isSelected}
         isDragging={isDraggingPin}
         canDrag={canDrag}
@@ -473,6 +477,7 @@ function areIssuePinPropsEqual(prev: IssuePinProps, next: IssuePinProps): boolea
   if (prev.canDrag !== next.canDrag) return false
   if (prev.issue.id !== next.issue.id) return false
   if (prev.issue.no !== next.issue.no) return false
+  if (prev.issue.exportNo !== next.issue.exportNo) return false
   if (prev.issue.pin_x !== next.issue.pin_x) return false
   if (prev.issue.pin_y !== next.issue.pin_y) return false
   if (prev.issue.callout_x !== next.issue.callout_x) return false
