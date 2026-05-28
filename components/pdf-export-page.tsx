@@ -88,6 +88,9 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
   const projectId = projectIdProp ?? params.id
   const drawingId = searchParams.get('drawingId')
+  const exportTarget = searchParams.get('target')
+  const exportContractorId = searchParams.get('contractorId')
+  const exportContentType = searchParams.get('contentType')
 
   const [project, setProject] = useState<Project | null>(null)
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
@@ -531,9 +534,16 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             <div>
               <h1 className="text-lg font-bold text-slate-900 md:text-xl">検査表PDF出力</h1>
               <p className="mt-1 text-xs text-slate-500">
-                案件ID: {projectId}
+                projectId: {projectId}
                 <span className="mx-2 text-slate-300">|</span>
-                図面ID: {drawingId}
+                drawingId: {drawingId}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                target: {exportTarget ?? '—'}
+                <span className="mx-2 text-slate-300">|</span>
+                contractorId: {exportContractorId ?? '—'}
+                <span className="mx-2 text-slate-300">|</span>
+                contentType: {exportContentType ?? '—'}
               </p>
               <p className="mt-1 text-sm text-slate-600">
                 {project.name}

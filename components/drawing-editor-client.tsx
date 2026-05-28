@@ -451,49 +451,57 @@ export default function DrawingEditorClient() {
 
   const handleOpenPdfExportPage = useCallback(() => {
     console.log('PDF出力ボタンがクリックされました')
-    console.log('projectId:', projectId)
-    console.log('currentDrawingId:', currentDrawing?.id)
-    console.log('selectedDrawingId:', drawingId)
-    console.log('drawingId:', drawingId)
+    console.log('pdf export condition:', {
+      exportTarget,
+      exportContractorId,
+      exportContentType,
+    })
 
-    const resolvedProjectId = routeProjectId ?? project?.id ?? projectId
+    const resolvedProjectId =
+      routeProjectId ??
+      (projectId || project?.id || currentDrawing?.project_id || undefined)
     const resolvedDrawingId =
-      currentDrawing?.id ??
-      drawingId ??
-      (currentDrawingIndex >= 0 ? sortedDrawings[currentDrawingIndex]?.id : undefined) ??
-      routeDrawingId
+      currentDrawing?.id ||
+      drawingId ||
+      routeDrawingId ||
+      (currentDrawingIndex >= 0 ? drawings[currentDrawingIndex]?.id : undefined) ||
+      (currentDrawingIndex >= 0 ? sortedDrawings[currentDrawingIndex]?.id : undefined)
+
+    console.log('PDF export navigation:', {
+      resolvedProjectId,
+      resolvedDrawingId,
+    })
 
     if (!resolvedProjectId) {
-      console.error('PDF出力ページへ移動できません: projectId が取得できていません', {
-        routeProjectId,
-        projectId: project?.id,
-      })
-      toast.error('案件情報が取得できていないため、PDF出力ページへ移動できません。')
+      console.error('projectId is missing')
+      alert('案件情報が取得できていないため、PDF出力ページへ移動できません。')
       return
     }
 
     if (!resolvedDrawingId) {
-      console.error('PDF出力ページへ移動できません: drawingId が取得できていません', {
-        currentDrawingId: currentDrawing?.id,
-        drawingId,
-        currentDrawingIndex,
-        sortedDrawingIds: sortedDrawings.map((item) => item.id),
-      })
-      toast.error('図面情報が取得できていないため、PDF出力ページへ移動できません。')
+      console.error('drawingId is missing')
+      alert('図面情報が取得できていないため、PDF出力ページへ移動できません。')
       return
     }
 
-    const exportUrl = `/projects/${resolvedProjectId}/export?drawingId=${resolvedDrawingId}`
-    console.log('navigate to pdf export page:', {
-      projectId: resolvedProjectId,
-      drawingId: resolvedDrawingId,
-      exportUrl,
-    })
+    const params = new URLSearchParams()
+    params.set('drawingId', resolvedDrawingId)
+    params.set('target', exportTarget)
+    params.set('contractorId', exportContractorId)
+    params.set('contentType', exportContentType)
+
+    const exportUrl = `/projects/${resolvedProjectId}/export?${params.toString()}`
+    console.log('router.push url:', exportUrl)
     router.push(exportUrl)
   }, [
     currentDrawing?.id,
+    currentDrawing?.project_id,
     currentDrawingIndex,
     drawingId,
+    drawings,
+    exportContentType,
+    exportContractorId,
+    exportTarget,
     project?.id,
     projectId,
     routeDrawingId,
@@ -1237,7 +1245,7 @@ export default function DrawingEditorClient() {
                           handleOpenPdfExportPage()
                         }}
                       >
-                        PDF出力ページへ進む
+                        PDF出力
                       </Button>
                     </CardContent>
                   </Card>
@@ -1366,7 +1374,7 @@ export default function DrawingEditorClient() {
               }}
             >
               <Download className="mr-2 h-5 w-5" />
-              PDF出力ページへ進む
+              PDF出力
             </Button>
             <Button
               variant="destructive"
