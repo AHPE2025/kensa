@@ -50,6 +50,53 @@ type DrawingRow = Drawing & {
   file_name?: string | null
 }
 
+type ExportTargetMode = 'all' | 'unassigned' | 'contractor'
+type ExportContentMode = 'drawing_and_list' | 'drawing_only' | 'list_only'
+
+const FALLBACK_CONTRACTOR_NAMES = [
+  'ウエハラ工芸',
+  '新星工業',
+  '幡成サッシ',
+  'SHIN鉄工',
+  'アルテエンジニアリング',
+  '栄光プロビジョン',
+  '富士機材',
+  '工藤工務店',
+] as const
+
+const FALLBACK_CONTRACTORS: Contractor[] = FALLBACK_CONTRACTOR_NAMES.map((name, index) => ({
+  id: `fallback-${index}`,
+  tenant_id: 'fallback',
+  name,
+  category: '開発用',
+  phone: null,
+  created_at: new Date(0).toISOString(),
+}))
+
+function parseExportTargetParam(value: string | null): ExportTargetMode {
+  if (value === 'unassigned' || value === 'contractor' || value === 'all') return value
+  return 'all'
+}
+
+function parseExportContentParam(value: string | null): ExportContentMode {
+  if (value === 'list') return 'list_only'
+  if (value === 'drawing_only') return 'drawing_only'
+  if (value === 'drawing_and_list') return 'drawing_and_list'
+  return 'drawing_and_list'
+}
+
+function resolveInitialContractorId(
+  target: ExportTargetMode,
+  urlContractorId: string | null,
+  resolvedContractors: Contractor[],
+): string {
+  if (target === 'contractor' && urlContractorId && urlContractorId !== 'all') {
+    const matched = resolvedContractors.find((contractor) => contractor.id === urlContractorId)
+    if (matched) return matched.id
+  }
+  return resolvedContractors[0]?.id ?? ''
+}
+
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 function normalizeRotation(value: unknown): number {
@@ -88,9 +135,9 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
   const projectId = projectIdProp ?? params.id
   const drawingId = searchParams.get('drawingId')
-  const exportTarget = searchParams.get('target')
-  const exportContractorId = searchParams.get('contractorId')
-  const exportContentType = searchParams.get('contentType')
+  const urlExportTarget = searchParams.get('target')
+  const urlExportContractorId = searchParams.get('contractorId')
+  const urlExportContentType = searchParams.get('contentType')
 
   const [project, setProject] = useState<Project | null>(null)
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
@@ -106,9 +153,10 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   const [previewPhotoIssues, setPreviewPhotoIssues] = useState<PhotoDetailIssue[]>([])
   const [loadingPreviewPhotos, setLoadingPreviewPhotos] = useState(false)
 
+  const [selectedExportTarget, setSelectedExportTarget] = useState<ExportTargetMode>('all')
   const [selectedContractorId, setSelectedContractorId] = useState<string>('')
   const [selectedDrawingId, setSelectedDrawingId] = useState<string>('')
-  const [exportContent, setExportContent] = useState<'drawing_and_list' | 'drawing_only'>('drawing_and_list')
+  const [exportContent, setExportContent] = useState<ExportContentMode>('drawing_and_list')
 
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
@@ -185,7 +233,17 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         throw new Error(drawingListData.error ?? '図面一覧の取得に失敗しました')
       }
 
-      const resolvedContractors = contractorData.contractors ?? []
+      const resolvedContractors =
+        (contractorData.contractors ?? []).length > 0
+          ? (contractorData.contractors ?? [])
+          : FALLBACK_CONTRACTORS
+      const initialExportTarget = parseExportTargetParam(urlExportTarget)
+      const initialExportContent = parseExportContentParam(urlExportContentType)
+      const initialContractorId = resolveInitialContractorId(
+        initialExportTarget,
+        urlExportContractorId,
+        resolvedContractors,
+      )
       const sortedDrawingsList = sortDrawingsByFloorLabel(drawingListData.drawings ?? [])
 
       const drawingFromList = sortedDrawingsList.find((item) => item.id === drawingId) ?? null
@@ -217,7 +275,9 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       setContractors(resolvedContractors)
       setIssues(allIssues)
       setSelectedDrawingId(drawingId)
-      setSelectedContractorId(resolvedContractors[0]?.id ?? '')
+      setSelectedExportTarget(initialExportTarget)
+      setExportContent(initialExportContent)
+      setSelectedContractorId(initialContractorId)
     } catch (error) {
       console.error('pdf export page load error:', error)
       const message = error instanceof Error ? error.message : 'PDF出力に必要な情報が取得できません'
@@ -225,7 +285,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     } finally {
       setLoading(false)
     }
-  }, [drawingId, loadDrawingWithSignedUrl, projectId])
+  }, [drawingId, loadDrawingWithSignedUrl, projectId, urlExportContentType, urlExportContractorId, urlExportTarget])
 
   useEffect(() => {
     if (user) void loadData()
@@ -265,12 +325,26 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
   const exportCondition = useMemo<PdfExportCondition>(
     () => ({
-      exportTarget: 'contractor',
-      exportContractorId: selectedContractorId || 'all',
-      exportContentType: 'drawing_and_list',
+      exportTarget: selectedExportTarget,
+      exportContractorId:
+        selectedExportTarget === 'contractor' ? selectedContractorId || 'all' : 'all',
+      exportContentType: exportContent === 'list_only' ? 'list' : 'drawing_and_list',
     }),
-    [selectedContractorId],
+    [exportContent, selectedContractorId, selectedExportTarget],
   )
+
+  const selectedTableBadgeVariant = useMemo(() => {
+    if (selectedExportTarget === 'unassigned') return 'unassigned' as const
+    if (selectedExportTarget === 'all') return 'all' as const
+    return 'contractor' as const
+  }, [selectedExportTarget])
+
+  const canExport = useMemo(() => {
+    if (selectedExportTarget === 'contractor') {
+      return Boolean(selectedContractorId) && selectedContractorId !== 'all'
+    }
+    return true
+  }, [selectedContractorId, selectedExportTarget])
 
   const numberedIssues = useMemo(() => {
     const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
@@ -361,7 +435,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   }, [])
 
   const handlePdfExport = useCallback(async () => {
-    if (!selectedContractorId) {
+    if (selectedExportTarget === 'contractor' && !selectedContractorId) {
       toast.error('出力する業者を選択してください')
       return
     }
@@ -371,8 +445,8 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
       const { commonIssues: commonForExport, photoDetailIssues } = pdfExportSplit
 
-      const includeLists = exportContent === 'drawing_and_list'
-      const includeDrawing = true
+      const includeLists = exportContent === 'drawing_and_list' || exportContent === 'list_only'
+      const includeDrawing = exportContent === 'drawing_and_list' || exportContent === 'drawing_only'
       const includePhotoDetail = includeLists && photoDetailIssues.length > 0
 
       const selectedTableTarget = selectedTableExportRef.current
@@ -447,7 +521,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       setPhotoDetailExportData([])
       setIsExporting(false)
     }
-  }, [exportContent, pdfExportSplit, selectedContractorId])
+  }, [exportContent, pdfExportSplit, selectedContractorId, selectedExportTarget])
 
   const backHref =
     projectId && drawingId
@@ -510,7 +584,8 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     )
   }
 
-  const showLists = exportContent === 'drawing_and_list'
+  const showLists = exportContent === 'drawing_and_list' || exportContent === 'list_only'
+  const showDrawingPreview = exportContent !== 'list_only'
   const showCommonTable = showLists && commonIssues.length > 0
   const showPhotoDetails = showLists && previewPhotoIssues.length > 0
   const hasContractors = contractors.length > 0
@@ -539,11 +614,11 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                 drawingId: {drawingId}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                target: {exportTarget ?? '—'}
+                target: {urlExportTarget ?? '—'}
                 <span className="mx-2 text-slate-300">|</span>
-                contractorId: {exportContractorId ?? '—'}
+                contractorId: {urlExportContractorId ?? '—'}
                 <span className="mx-2 text-slate-300">|</span>
-                contentType: {exportContentType ?? '—'}
+                contentType: {urlExportContentType ?? '—'}
               </p>
               <p className="mt-1 text-sm text-slate-600">
                 {project.name}
@@ -567,7 +642,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             </Button>
             <Button
               className="h-10 gap-2 bg-blue-600 px-3 hover:bg-blue-700 md:h-11 md:px-4"
-              disabled={isExporting || !hasContractors}
+              disabled={isExporting || !canExport}
               onClick={() => void handlePdfExport()}
             >
               <Download className="h-4 w-4" />
@@ -587,23 +662,56 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                 </CardHeader>
                 <CardContent className="space-y-5">
                   <div className="space-y-2">
+                    <Label className="text-sm font-medium">出力対象</Label>
+                    <RadioGroup
+                      value={selectedExportTarget}
+                      onValueChange={(value) => setSelectedExportTarget(value as ExportTargetMode)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="all" id="pdf-export-target-all" />
+                        <Label htmlFor="pdf-export-target-all" className="text-sm">
+                          全業者
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="contractor" id="pdf-export-target-contractor" />
+                        <Label htmlFor="pdf-export-target-contractor" className="text-sm">
+                          特定業者
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="unassigned" id="pdf-export-target-unassigned" />
+                        <Label htmlFor="pdf-export-target-unassigned" className="text-sm">
+                          業者未定
+                        </Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+
+                  <div className="space-y-2">
                     <Label className="text-sm font-medium">業者選択</Label>
-                    {hasContractors ? (
-                      <Select value={selectedContractorId} onValueChange={setSelectedContractorId}>
-                        <SelectTrigger className="h-11">
-                          <SelectValue placeholder="業者を選択" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {contractors.map((contractor) => (
-                            <SelectItem key={contractor.id} value={contractor.id}>
-                              {contractor.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                    {selectedExportTarget === 'contractor' ? (
+                      hasContractors ? (
+                        <Select value={selectedContractorId} onValueChange={setSelectedContractorId}>
+                          <SelectTrigger className="h-11">
+                            <SelectValue placeholder="業者を選択" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {contractors.map((contractor) => (
+                              <SelectItem key={contractor.id} value={contractor.id}>
+                                {contractor.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                          業者が登録されていません
+                        </p>
+                      )
                     ) : (
-                      <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                        業者が登録されていません
+                      <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                        {selectedExportTarget === 'all' ? '全業者の指摘を出力します' : '業者未定の指摘を出力します'}
                       </p>
                     )}
                   </div>
@@ -632,14 +740,18 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                     <Label className="text-sm font-medium">出力内容</Label>
                     <RadioGroup
                       value={exportContent}
-                      onValueChange={(value) =>
-                        setExportContent(value as 'drawing_and_list' | 'drawing_only')
-                      }
+                      onValueChange={(value) => setExportContent(value as ExportContentMode)}
                     >
                       <div className="flex items-center gap-2">
                         <RadioGroupItem value="drawing_and_list" id="pdf-list-and-drawing" />
                         <Label htmlFor="pdf-list-and-drawing" className="text-sm">
                           一覧＋図面
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="list_only" id="pdf-list-only" />
+                        <Label htmlFor="pdf-list-only" className="text-sm">
+                          指摘一覧のみ
                         </Label>
                       </div>
                       <div className="flex items-center gap-2">
@@ -650,6 +762,16 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                       </div>
                     </RadioGroup>
                   </div>
+
+                  <Button
+                    type="button"
+                    className="h-11 w-full bg-blue-600 hover:bg-blue-700"
+                    disabled={isExporting || !canExport}
+                    onClick={() => void handlePdfExport()}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    {isExporting ? 'PDF作成中...' : 'PDF出力'}
+                  </Button>
                 </CardContent>
               </Card>
 
@@ -730,7 +852,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                     exportDate={exportDateLabel}
                     floorLabel={selectedFloorLabel}
                     badgeLabel={pdfExportSplit.exportContractorLabel}
-                    badgeVariant="contractor"
+                    badgeVariant={selectedTableBadgeVariant}
                     issues={selectedVendorIssues}
                     emptyMessage="この業者の指摘はありません"
                   />
@@ -759,6 +881,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
               </div>
             ) : null}
 
+            {showDrawingPreview ? (
             <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md">
               <div className="border-b border-slate-100 px-6 py-4">
                 <h3 className="text-base font-semibold text-slate-900">図面プレビュー</h3>
@@ -825,6 +948,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                 )}
               </div>
             </div>
+            ) : null}
 
             {loadingPreviewPhotos && showLists && photoDetailIssuesForPreview.length > 0 ? (
               <p className="text-center text-sm text-slate-500">写真を読み込み中...</p>
@@ -853,7 +977,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
               exportDate={exportDateLabel}
               floorLabel={selectedFloorLabel}
               badgeLabel={pdfExportSplit.exportContractorLabel}
-              badgeVariant="contractor"
+              badgeVariant={selectedTableBadgeVariant}
               issues={selectedVendorIssues}
               emptyMessage="この業者の指摘はありません"
             />
@@ -874,6 +998,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             />
           </div>
         ) : null}
+        {showDrawingPreview ? (
         <div
           ref={drawingExportRef}
           className="relative bg-white"
@@ -908,6 +1033,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             </>
           ) : null}
         </div>
+        ) : null}
         {(photoDetailExportData.length > 0 ? photoDetailExportData : []).map((issue, index) => (
           <div
             key={issue.id}
