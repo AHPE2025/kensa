@@ -37,7 +37,6 @@ import {
   waitForElementImages,
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
-import { normalizeIssueStatus } from '@/lib/issue-status'
 import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { PdfExportPhotoDetailPage, type PhotoDetailIssue } from '@/components/pdf-export-photo-detail'
 import { IssuePinsStage } from '@/components/issue-pins-stage'
@@ -85,14 +84,18 @@ function normalizeRotation(value: unknown): number {
   return 0
 }
 
-export function PdfExportPage() {
+type PdfExportPageProps = {
+  projectId?: string
+}
+
+export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps = {}) {
   const params = useParams<{ id: string }>()
   const searchParams = useSearchParams()
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const loadingAuth = useAuthStore((s) => s.loading)
 
-  const projectId = params.id
+  const projectId = projectIdProp ?? params.id
   const drawingId = searchParams.get('drawingId')
 
   const [project, setProject] = useState<Project | null>(null)
@@ -111,8 +114,7 @@ export function PdfExportPage() {
   const [exportContractorId, setExportContractorId] = useState<string>('all')
   const [selectedFloor, setSelectedFloor] = useState<string>('all')
   const [exportContent, setExportContent] = useState<'drawing_and_list' | 'drawing_only'>('drawing_and_list')
-  const exportContentType: PdfExportCondition['exportContentType'] =
-    exportContent === 'drawing_only' ? 'drawing_and_list' : 'drawing_and_list'
+  const exportContentType = exportContent
 
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
@@ -135,7 +137,7 @@ export function PdfExportPage() {
   }, [loadingAuth, user, router])
 
   useEffect(() => {
-    console.log('pdf export page params:', { projectId, drawingId })
+    console.log('pdf export page loaded:', { projectId, drawingId })
   }, [projectId, drawingId])
 
   const loadDrawingWithSignedUrl = useCallback(
@@ -293,9 +295,9 @@ export function PdfExportPage() {
     () => ({
       exportTarget,
       exportContractorId,
-      exportContentType,
+      exportContentType: 'drawing_and_list',
     }),
-    [exportTarget, exportContractorId, exportContentType],
+    [exportTarget, exportContractorId],
   )
 
   const numberedIssues = useMemo(() => {
@@ -320,16 +322,12 @@ export function PdfExportPage() {
 
   const pinsToRender = exportDrawingPageIssues
 
-  const exportStatusCounts = useMemo(() => {
-    const targetIssues = pdfExportSplit.selectedIssues
-    const pendingCount = targetIssues.filter(
-      (issue) => normalizeIssueStatus(issue.status) === '未対応',
-    ).length
-    const completedCount = targetIssues.filter(
-      (issue) => normalizeIssueStatus(issue.status) === '完了',
-    ).length
-    return { total: targetIssues.length, pending: pendingCount, completed: completedCount }
-  }, [pdfExportSplit.selectedIssues])
+  const targetIssues = useMemo(
+    () => [...pdfExportSplit.selectedIssues, ...pdfExportSplit.commonIssues],
+    [pdfExportSplit.selectedIssues, pdfExportSplit.commonIssues],
+  )
+
+  const targetIssueCount = targetIssues.length
 
   const photoDetailIssuesForPreview = useMemo(() => {
     return mergePhotoSignedUrls(
@@ -361,12 +359,12 @@ export function PdfExportPage() {
   }, [exportTarget, exportContractorId])
 
   useEffect(() => {
-    console.log('pdf export condition:', {
+    console.log('pdf export condition changed:', {
       selectedContractor: contractorSelectValue,
       selectedFloor,
-      exportContentType: exportContent,
+      exportContentType,
     })
-  }, [contractorSelectValue, selectedFloor, exportContent])
+  }, [contractorSelectValue, selectedFloor, exportContentType])
 
   useEffect(() => {
     console.log('pdf selected contractor:', pdfExportSplit.selectedContractor)
@@ -398,6 +396,11 @@ export function PdfExportPage() {
 
   const noop = useCallback(() => {}, [])
 
+  const handleBulkExport = useCallback(() => {
+    console.log('bulk pdf export clicked')
+    toast.info('全業者一括出力は現在準備中です。')
+  }, [])
+
   const handlePdfExport = useCallback(async () => {
     try {
       setIsExporting(true)
@@ -411,28 +414,15 @@ export function PdfExportPage() {
         photoDetailIssues,
       } = pdfExportSplit
 
-      console.log('pdf export start:', {
+      console.log('pdf export clicked:', {
         projectId,
         drawingId: drawing?.id ?? drawingId,
         selectedContractor: contractorSelectValue,
         selectedFloor,
-        exportContentType: exportContent,
+        exportContentType,
         selectedIssues,
         commonIssues,
         drawingIssues,
-      })
-
-      const targetIssues = selectedIssues
-      const pendingCount = targetIssues.filter(
-        (issue) => normalizeIssueStatus(issue.status) === '未対応',
-      ).length
-      const completedCount = targetIssues.filter(
-        (issue) => normalizeIssueStatus(issue.status) === '完了',
-      ).length
-      console.log('pdf issue status counts:', {
-        total: targetIssues.length,
-        pending: pendingCount,
-        completed: completedCount,
       })
 
       if (exportTarget === 'contractor' && exportContractorId === 'all') {
@@ -512,7 +502,7 @@ export function PdfExportPage() {
       console.log('pdf export done')
       toast.success(`${exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
-      console.error('pdf export error:', error)
+      console.error('pdf export page error:', error)
       toast.error('PDF出力に失敗しました')
     } finally {
       setPhotoDetailExportData([])
@@ -522,7 +512,7 @@ export function PdfExportPage() {
     contractorSelectValue,
     drawing?.id,
     drawingId,
-    exportContent,
+    exportContentType,
     exportContractorId,
     exportTarget,
     pdfExportSplit,
@@ -575,46 +565,46 @@ export function PdfExportPage() {
   }
 
   const showLists = exportContent === 'drawing_and_list'
-  const showCommonTable =
-    showLists && pdfExportSplit.separateCommonPage && pdfExportSplit.commonIssues.length > 0
-  const showPhotoDetail =
-    showLists && pdfExportSplit.photoDetailIssues.length > 0
+  const showCommonTable = showLists && pdfExportSplit.commonIssues.length > 0
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
-      <header className="flex h-14 items-center gap-3 border-b border-border bg-card px-4">
+    <div className="flex h-screen flex-col overflow-hidden bg-slate-100">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 md:h-16 md:px-6">
         <Button variant="ghost" size="icon" onClick={() => router.push(backHref)}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
-        <div className="flex-1">
-          <h1 className="text-sm font-bold text-foreground">PDF出力</h1>
-          <p className="text-xs text-muted-foreground">{project.name}</p>
+        <div className="min-w-0 flex-1">
+          <h1 className="text-sm font-bold text-foreground md:text-base">PDF出力</h1>
+          <p className="truncate text-xs text-muted-foreground md:text-sm">{project.name}</p>
         </div>
-        <Button
-          variant="outline"
-          className="h-10 gap-2"
-          onClick={() => toast.info('全業者一括出力は準備中です')}
-        >
-          <Printer className="h-4 w-4" />
-          全業者一括出力
-        </Button>
-        <Button
-          className="h-10 gap-2 bg-blue-600 hover:bg-blue-700"
-          disabled={isExporting}
-          onClick={() => void handlePdfExport()}
-        >
-          <Download className="h-4 w-4" />
-          {isExporting ? 'PDF作成中...' : 'PDF出力'}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2 md:gap-3">
+          <Button
+            variant="outline"
+            className="h-10 gap-2 bg-white px-3 md:h-11 md:px-4"
+            onClick={handleBulkExport}
+          >
+            <Printer className="h-4 w-4" />
+            <span className="hidden sm:inline">全業者一括出力</span>
+            <span className="sm:hidden">一括出力</span>
+          </Button>
+          <Button
+            className="h-10 gap-2 bg-blue-600 px-3 hover:bg-blue-700 md:h-11 md:px-4"
+            disabled={isExporting}
+            onClick={() => void handlePdfExport()}
+          >
+            <Download className="h-4 w-4" />
+            {isExporting ? 'PDF作成中...' : 'PDF出力'}
+          </Button>
+        </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-card lg:w-80">
-          <div className="border-b border-border p-4">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <aside className="flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white md:w-[280px] lg:w-[320px]">
+          <div className="border-b border-slate-200 px-4 py-4">
             <h2 className="text-sm font-semibold text-foreground">出力設定</h2>
           </div>
 
-          <ScrollArea className="flex-1">
+          <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col gap-6 p-4">
               <div className="flex flex-col gap-3">
                 <Label className="text-sm font-medium">業者選択</Label>
@@ -624,8 +614,8 @@ export function PdfExportPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">全業者</SelectItem>
-                    <SelectItem value={UNASSIGNED_CONTRACTOR_KEY}>業者未定</SelectItem>
                     <SelectItem value={COMMON_CONTRACTOR_KEY}>共通</SelectItem>
+                    <SelectItem value={UNASSIGNED_CONTRACTOR_KEY}>業者未定</SelectItem>
                     {contractors.map((contractor) => (
                       <SelectItem key={contractor.id} value={contractor.id}>
                         {contractor.name}
@@ -678,62 +668,41 @@ export function PdfExportPage() {
                   </div>
                 </RadioGroup>
               </div>
-
-              <Separator />
-
-              <Card className="bg-accent/50">
-                <CardContent className="p-4">
-                  <div className="flex flex-col gap-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">対象業者</span>
-                      <span className="font-medium text-foreground">
-                        {pdfExportSplit.exportContractorLabel}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">対象階</span>
-                      <span className="font-medium text-foreground">
-                        {selectedFloor === 'all' ? '全階' : selectedFloor}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">合計件数</span>
-                      <span className="font-bold text-foreground">
-                        {exportStatusCounts.total}件
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">未対応件数</span>
-                      <span className="font-medium text-orange-700">
-                        {exportStatusCounts.pending}件
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">完了件数</span>
-                      <span className="font-medium text-green-700">
-                        {exportStatusCounts.completed}件
-                      </span>
-                    </div>
-                    {pdfExportSplit.photoDetailIssues.length > 0 ? (
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">写真付き</span>
-                        <span className="font-medium text-foreground">
-                          {pdfExportSplit.photoDetailIssues.length}件
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           </ScrollArea>
+
+          <div className="border-t border-slate-200 p-4">
+            <Card className="rounded-lg border-slate-200 bg-slate-50 shadow-sm">
+              <CardContent className="space-y-3 p-4">
+                <h3 className="text-sm font-semibold text-foreground">対象情報</h3>
+                <dl className="space-y-2 text-sm">
+                  <div>
+                    <dt className="text-muted-foreground">対象業者</dt>
+                    <dd className="font-medium text-foreground">
+                      {pdfExportSplit.exportContractorLabel}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">対象階</dt>
+                    <dd className="font-medium text-foreground">
+                      {selectedFloor === 'all' ? '全階' : selectedFloor}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">指摘件数</dt>
+                    <dd className="text-lg font-bold text-foreground">{targetIssueCount}件</dd>
+                  </div>
+                </dl>
+              </CardContent>
+            </Card>
+          </div>
         </aside>
 
-        <div className="flex-1 overflow-auto bg-muted/30 p-6">
-          <div className="mx-auto max-w-4xl space-y-6">
+        <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-4 md:p-8">
+          <div className="mx-auto flex max-w-5xl flex-col items-center gap-8">
             {showLists ? (
-              <div className="overflow-hidden rounded-lg border bg-white shadow-lg">
-                <div className="origin-top-left scale-[0.72] md:scale-[0.85]" style={{ width: 1122 }}>
+              <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md">
+                <div className="origin-top mx-auto scale-[0.68] sm:scale-[0.75] md:scale-[0.85]" style={{ width: 1122 }}>
                   <PdfExportIssueTable
                     title="検査指摘一覧表"
                     projectName={project.name}
@@ -749,8 +718,8 @@ export function PdfExportPage() {
             ) : null}
 
             {showCommonTable ? (
-              <div className="overflow-hidden rounded-lg border bg-white shadow-lg">
-                <div className="origin-top-left scale-[0.72] md:scale-[0.85]" style={{ width: 1122 }}>
+              <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md">
+                <div className="origin-top mx-auto scale-[0.68] sm:scale-[0.75] md:scale-[0.85]" style={{ width: 1122 }}>
                   <PdfExportIssueTable
                     title="共通指摘一覧表"
                     projectName={project.name}
@@ -765,13 +734,18 @@ export function PdfExportPage() {
               </div>
             ) : null}
 
-            <Card className="overflow-hidden shadow-lg">
-              <CardContent className="p-4">
-                <p className="mb-3 text-sm font-medium text-foreground">図面プレビュー（ピン付き）</p>
+            <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md">
+              <div className="border-b border-slate-100 px-6 py-4">
+                <h2 className="text-base font-semibold text-foreground">図面プレビュー</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  対象 {pdfExportSplit.drawingIssues.length} 件の指摘
+                </p>
+              </div>
+              <div className="p-6">
                 {pdfUrl ? (
-                  <div className="flex justify-center overflow-auto bg-slate-100 p-2">
+                  <div className="flex justify-center overflow-auto rounded-lg bg-slate-50 p-4">
                     <div
-                      className="relative bg-white shadow"
+                      className="relative bg-white shadow-sm"
                       style={{ width: stageWidth * 0.55, height: stageHeight * 0.55 }}
                     >
                       <div
@@ -819,29 +793,14 @@ export function PdfExportPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center gap-3 py-12 text-muted-foreground">
+                  <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 py-16 text-muted-foreground">
                     <FileText className="h-12 w-12" />
-                    <p className="text-sm">図面を読み込めません</p>
+                    <p className="text-sm">指摘ピン付き図面がここに表示されます</p>
+                    <p className="text-xs">対象 {pdfExportSplit.drawingIssues.length} 件</p>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-
-            {showPhotoDetail ? (
-              <div className="space-y-4">
-                <p className="text-sm font-medium text-foreground">写真付き指摘詳細プレビュー</p>
-                {photoDetailIssuesForPreview.map((issue) => (
-                  <div
-                    key={issue.id}
-                    className="overflow-hidden rounded-lg border bg-white shadow-lg"
-                  >
-                    <div className="origin-top-left scale-[0.55]" style={{ width: 794 }}>
-                      <PdfExportPhotoDetailPage issue={issue} />
-                    </div>
-                  </div>
-                ))}
               </div>
-            ) : null}
+            </div>
           </div>
         </div>
       </div>

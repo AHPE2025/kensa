@@ -137,13 +137,13 @@ export function PdfExportIssueTable({
 
         <div className="mt-5 flex gap-6 border-t border-slate-200 pt-4 text-sm text-slate-700">
           <span>
-            合計件数：<strong>{stats.total}</strong>件
+            合計：<strong>{stats.total}</strong>件
           </span>
           <span>
-            未対応件数：<strong>{stats.open}</strong>件
+            未対応：<strong>{stats.open}</strong>件
           </span>
           <span>
-            完了件数：<strong>{stats.done}</strong>件
+            完了：<strong>{stats.done}</strong>件
           </span>
         </div>
       </div>
