@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Download, Filter, MapPin, Trash2 } from 'lucide-react'
-import { Document, Page, pdfjs } from 'react-pdf'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -47,7 +46,7 @@ import { toast } from 'sonner'
 import { DrawingToolbar } from '@/components/drawing-toolbar'
 import { IssueListPanel, type IssueStatusFilter } from '@/components/issue-list-panel'
 import { ContractorFilter } from '@/components/contractor-filter'
-import { IssuePinsStage } from '@/components/issue-pins-stage'
+import { DrawingCanvas } from '@/components/drawing-canvas'
 import { IssueModal } from '@/components/issue-modal'
 
 type DrawingRow = Drawing & {
@@ -98,8 +97,6 @@ function resolveRouteParam(value: string | string[] | undefined): string | undef
   if (Array.isArray(value)) return value[0] || undefined
   return undefined
 }
-
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 export default function DrawingEditorClient() {
   const params = useParams<{ id: string; drawingId: string }>()
@@ -373,18 +370,6 @@ export default function DrawingEditorClient() {
     setPageIndex(Math.max(totalPages - 1, 0))
   }, [currentDrawing, pageIndex, pdfPageCount])
 
-  useEffect(() => {
-    console.log('issues:', issues)
-  }, [issues])
-
-  useEffect(() => {
-    console.log('selected contractor filter:', listFilters.contractorId)
-  }, [listFilters.contractorId])
-
-  useEffect(() => {
-    console.log('status filter changed:', listFilters.statusFilter)
-  }, [listFilters.statusFilter])
-
   const numberedIssues = useMemo(() => {
     const sorted = [...issues].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
     return sorted.map((issue, index) => ({ ...issue, no: index + 1 }))
@@ -428,15 +413,6 @@ export default function DrawingEditorClient() {
     currentDrawingIndex >= 0 && currentDrawingIndex < sortedDrawings.length - 1
       ? sortedDrawings[currentDrawingIndex + 1]
       : null
-
-  useEffect(() => {
-    console.log('project drawings:', drawings)
-    console.log('sorted drawings:', sortedDrawings)
-    console.log('current drawing index:', currentDrawingIndex)
-    console.log('current drawing id:', drawingId)
-    console.log('next drawing:', nextDrawing)
-    console.log('prev drawing:', prevDrawing)
-  }, [drawings, sortedDrawings, currentDrawingIndex, drawingId, nextDrawing, prevDrawing])
 
   const floors = useMemo(() => sortedDrawings.map((drawing) => drawing.floor_label), [sortedDrawings])
 
@@ -954,15 +930,10 @@ export default function DrawingEditorClient() {
   }, [])
 
   const updatePinPosition = useCallback(
-    async (issueId: string, pinX: number, pinY: number) => {
-      console.log('pin drag end:', { issueId, pin_x: pinX, pin_y: pinY })
-      const previousIssues = useEditorStore.getState().issues
+    async (issueId: string, pinX: number, pinY: number): Promise<boolean> => {
+      const toastId = `position-${issueId}-pin`
+      toast.loading('位置を保存中...', { id: toastId })
       const updatedAt = new Date().toISOString()
-      setIssues(
-        previousIssues.map((issue) =>
-          issue.id === issueId ? { ...issue, pin_x: pinX, pin_y: pinY, updated_at: updatedAt } : issue,
-        ),
-      )
       try {
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
           method: 'PATCH',
@@ -972,32 +943,31 @@ export default function DrawingEditorClient() {
         const data = (await response.json()) as { error?: string }
         if (!response.ok) {
           console.error('update issue position error:', data.error ?? data)
-          setIssues(previousIssues)
-          toast.error('位置の保存に失敗しました')
-          return
+          toast.error('位置の保存に失敗しました', { id: toastId })
+          return false
         }
-        console.log('issue position saved:', { issueId })
+        const currentIssues = useEditorStore.getState().issues
+        setIssues(
+          currentIssues.map((issue) =>
+            issue.id === issueId ? { ...issue, pin_x: pinX, pin_y: pinY, updated_at: updatedAt } : issue,
+          ),
+        )
+        toast.success('保存しました', { id: toastId })
+        return true
       } catch (error) {
         console.error('update issue position error:', error)
-        setIssues(previousIssues)
-        toast.error('位置の保存に失敗しました')
+        toast.error('位置の保存に失敗しました', { id: toastId })
+        return false
       }
     },
     [drawingId, setIssues],
   )
 
   const updateCalloutPosition = useCallback(
-    async (issueId: string, calloutX: number, calloutY: number) => {
-      console.log('callout drag end:', { issueId, callout_x: calloutX, callout_y: calloutY })
-      const previousIssues = useEditorStore.getState().issues
+    async (issueId: string, calloutX: number, calloutY: number): Promise<boolean> => {
+      const toastId = `position-${issueId}-callout`
+      toast.loading('位置を保存中...', { id: toastId })
       const updatedAt = new Date().toISOString()
-      setIssues(
-        previousIssues.map((issue) =>
-          issue.id === issueId
-            ? { ...issue, callout_x: calloutX, callout_y: calloutY, updated_at: updatedAt }
-            : issue,
-        ),
-      )
       try {
         const response = await authedFetch(`/api/drawings/${drawingId}/issues/${issueId}`, {
           method: 'PATCH',
@@ -1007,15 +977,23 @@ export default function DrawingEditorClient() {
         const data = (await response.json()) as { error?: string }
         if (!response.ok) {
           console.error('update issue position error:', data.error ?? data)
-          setIssues(previousIssues)
-          toast.error('位置の保存に失敗しました')
-          return
+          toast.error('位置の保存に失敗しました', { id: toastId })
+          return false
         }
-        console.log('issue position saved:', { issueId })
+        const currentIssues = useEditorStore.getState().issues
+        setIssues(
+          currentIssues.map((issue) =>
+            issue.id === issueId
+              ? { ...issue, callout_x: calloutX, callout_y: calloutY, updated_at: updatedAt }
+              : issue,
+          ),
+        )
+        toast.success('保存しました', { id: toastId })
+        return true
       } catch (error) {
         console.error('update issue position error:', error)
-        setIssues(previousIssues)
-        toast.error('位置の保存に失敗しました')
+        toast.error('位置の保存に失敗しました', { id: toastId })
+        return false
       }
     },
     [drawingId, setIssues],
@@ -1095,6 +1073,19 @@ export default function DrawingEditorClient() {
     setEditingIssue(null)
     setIssueModalOpen(true)
   }, [mode, stageHeight, stageWidth])
+
+  const handlePdfLoadSuccess = useCallback((numPages: number) => {
+    setPdfPageCount(numPages)
+    setImageError(null)
+  }, [])
+
+  const handlePdfLoadError = useCallback(() => {
+    setImageError('signed URLの取得に失敗しました')
+  }, [])
+
+  const handlePageLoadSuccess = useCallback((width: number, height: number) => {
+    setPageSize({ width, height })
+  }, [])
 
   return (
     <main className="flex h-screen flex-col bg-slate-50">
@@ -1321,56 +1312,32 @@ export default function DrawingEditorClient() {
                 </Card>
               </div>
             ) : (
-              <div className="flex min-h-full items-center justify-center">
-                <div
-                  className="relative overflow-hidden bg-white p-2 shadow"
-                  style={{ transform: `scale(${effectiveScale})`, transformOrigin: 'center center' }}
-                >
-                  <div
-                    ref={drawingExportRef}
-                    className="relative"
-                    style={{ width: stageWidth, height: stageHeight }}
-                  >
-                    <Document
-                      file={pdfUrl}
-                      onLoadSuccess={({ numPages }) => {
-                        setPdfPageCount(numPages)
-                        setImageError(null)
-                      }}
-                      onLoadError={() => {
-                        setImageError('signed URLの取得に失敗しました')
-                      }}
-                      loading={<div className="p-6 text-sm text-muted-foreground">PDFを読み込み中...</div>}
-                    >
-                      <Page
-                        pageNumber={Math.min(pageIndex + 1, totalPages)}
-                        width={renderWidth}
-                        rotate={rotation}
-                        onLoadSuccess={(page) => {
-                          const viewport = page.getViewport({ scale: 1 })
-                          setPageSize({ width: viewport.width, height: viewport.height })
-                        }}
-                      />
-                    </Document>
-                    <IssuePinsStage
-                      pinsToRender={pinsToRender}
-                      stageWidth={stageWidth}
-                      stageHeight={stageHeight}
-                      mode={mode}
-                      selectedIssueId={selectedIssueId}
-                      isExporting={isExporting}
-                      visibleContractorIds={visibleContractorIds}
-                      getIssueContractorId={getIssueContractorId}
-                      onStageClick={handleStageClick}
-                      onSelect={handleIssueSelect}
-                      onEdit={startEditIssue}
-                      onDeleteRequest={requestDeleteIssue}
-                      onDragPin={updatePinPosition}
-                      onDragCallout={updateCalloutPosition}
-                    />
-                  </div>
-                </div>
-              </div>
+              <DrawingCanvas
+                pdfUrl={pdfUrl}
+                pageIndex={pageIndex}
+                totalPages={totalPages}
+                renderWidth={renderWidth}
+                rotation={rotation}
+                stageWidth={stageWidth}
+                stageHeight={stageHeight}
+                effectiveScale={effectiveScale}
+                pinsToRender={pinsToRender}
+                mode={mode}
+                selectedIssueId={selectedIssueId}
+                isExporting={isExporting}
+                visibleContractorIds={visibleContractorIds}
+                getIssueContractorId={getIssueContractorId}
+                onPdfLoadSuccess={handlePdfLoadSuccess}
+                onPdfLoadError={handlePdfLoadError}
+                onPageLoadSuccess={handlePageLoadSuccess}
+                onStageClick={handleStageClick}
+                onSelect={handleIssueSelect}
+                onEdit={startEditIssue}
+                onDeleteRequest={requestDeleteIssue}
+                onDragPin={updatePinPosition}
+                onDragCallout={updateCalloutPosition}
+                canvasRef={drawingExportRef}
+              />
             )}
           </div>
 
