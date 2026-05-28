@@ -464,21 +464,18 @@ export default function DrawingEditorClient() {
   }, [exportTarget])
 
   const handleNavigateToPdfExport = useCallback(() => {
-    try {
-      if (!projectId || !drawingId) {
-        throw new Error('projectId or drawingId is missing')
-      }
-      console.log('navigate to pdf export:', { projectId, drawingId })
-      const contractorQuery =
-        listFilters.contractorId !== 'all'
-          ? `&contractorId=${encodeURIComponent(listFilters.contractorId)}`
-          : ''
-      router.push(`/projects/${projectId}/export?drawingId=${drawingId}${contractorQuery}`)
-    } catch (error) {
-      console.error('pdf export navigation error:', error)
-      toast.error('PDF出力に必要な情報が取得できません')
+    console.log('pdf export condition:', exportCondition)
+
+    if (!projectId || !drawingId) {
+      console.error('missing pdf export navigation params:', { projectId, drawingId })
+      toast.error('PDF出力ページへ移動できません。案件情報または図面情報が不足しています。')
+      return
     }
-  }, [drawingId, listFilters.contractorId, projectId, router])
+
+    const exportUrl = `/projects/${projectId}/export?drawingId=${drawingId}`
+    console.log('navigate to pdf export page:', { projectId, drawingId, exportUrl })
+    router.push(exportUrl)
+  }, [drawingId, exportCondition, projectId, router])
 
   const handlePdfExport = useCallback(async () => {
     try {

@@ -75,13 +75,6 @@ const FALLBACK_CONTRACTORS: Contractor[] = FALLBACK_CONTRACTOR_NAMES.map((name, 
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
-function resolveInitialExportTarget(contractorId: string | null): PdfExportCondition['exportTarget'] {
-  if (!contractorId || contractorId === 'all') return 'all'
-  if (contractorId === UNASSIGNED_CONTRACTOR_KEY) return 'unassigned'
-  if (contractorId === COMMON_CONTRACTOR_KEY) return 'common'
-  return 'contractor'
-}
-
 function normalizeRotation(value: unknown): number {
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) return 0
@@ -101,7 +94,6 @@ export function PdfExportPage() {
 
   const projectId = params.id
   const drawingId = searchParams.get('drawingId')
-  const initialContractorId = searchParams.get('contractorId')
 
   const [project, setProject] = useState<Project | null>(null)
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
@@ -115,20 +107,12 @@ export function PdfExportPage() {
   const [pdfPageCount, setPdfPageCount] = useState(1)
   const [photoDetailExportData, setPhotoDetailExportData] = useState<PhotoDetailIssue[]>([])
 
-  const [exportTarget, setExportTarget] = useState<PdfExportCondition['exportTarget']>(
-    resolveInitialExportTarget(initialContractorId),
-  )
-  const [exportContractorId, setExportContractorId] = useState<string>(
-    initialContractorId &&
-      initialContractorId !== 'all' &&
-      initialContractorId !== UNASSIGNED_CONTRACTOR_KEY &&
-      initialContractorId !== COMMON_CONTRACTOR_KEY
-      ? initialContractorId
-      : 'all',
-  )
+  const [exportTarget, setExportTarget] = useState<PdfExportCondition['exportTarget']>('all')
+  const [exportContractorId, setExportContractorId] = useState<string>('all')
   const [selectedFloor, setSelectedFloor] = useState<string>('all')
   const [exportContent, setExportContent] = useState<'drawing_and_list' | 'drawing_only'>('drawing_and_list')
-  const exportContentType: PdfExportCondition['exportContentType'] = 'drawing_and_list'
+  const exportContentType: PdfExportCondition['exportContentType'] =
+    exportContent === 'drawing_only' ? 'drawing_and_list' : 'drawing_and_list'
 
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
@@ -150,9 +134,34 @@ export function PdfExportPage() {
     if (!loadingAuth && !user) router.replace('/login')
   }, [loadingAuth, user, router])
 
+  useEffect(() => {
+    console.log('pdf export page params:', { projectId, drawingId })
+  }, [projectId, drawingId])
+
+  const loadDrawingWithSignedUrl = useCallback(
+    async (targetDrawingId: string, drawingFromList: DrawingRow | null): Promise<DrawingRow | null> => {
+      const issueRes = await authedFetch(`/api/drawings/${targetDrawingId}/issues`)
+      const issueData = (await issueRes.json()) as {
+        drawing?: DrawingRow
+        issues?: Issue[]
+        error?: string
+      }
+      if (!issueRes.ok || !issueData.drawing) {
+        return drawingFromList
+      }
+      return {
+        ...drawingFromList,
+        ...issueData.drawing,
+        storage_path: issueData.drawing.storage_path ?? issueData.drawing.file_path ?? null,
+        signed_url: issueData.drawing.signed_url ?? drawingFromList?.signed_url ?? null,
+      }
+    },
+    [],
+  )
+
   const loadData = useCallback(async () => {
-    if (!projectId || !drawingId) {
-      setLoadError('PDF出力に必要な情報が取得できません')
+    if (!projectId) {
+      setLoadError('案件情報を取得できませんでした')
       setLoading(false)
       return
     }
@@ -161,33 +170,21 @@ export function PdfExportPage() {
     setLoadError(null)
 
     try {
-      const [projectRes, drawingListRes, contractorRes, issueRes] = await Promise.all([
+      const [projectRes, drawingListRes, contractorRes] = await Promise.all([
         authedFetch(`/api/projects/${projectId}`),
         authedFetch(`/api/projects/${projectId}/drawings`),
         authedFetch(`/api/projects/${projectId}/contractors`),
-        authedFetch(`/api/drawings/${drawingId}/issues`),
       ])
 
       const projectData = (await projectRes.json()) as { project?: Project; error?: string }
       const drawingListData = (await drawingListRes.json()) as { drawings?: DrawingRow[]; error?: string }
       const contractorData = (await contractorRes.json()) as { contractors?: Contractor[]; error?: string }
-      const issueData = (await issueRes.json()) as {
-        drawing?: DrawingRow
-        issues?: Issue[]
-        error?: string
-      }
 
       if (!projectRes.ok || !projectData.project) {
-        throw new Error(projectData.error ?? '物件情報の取得に失敗しました')
+        throw new Error(projectData.error ?? '案件情報を取得できませんでした')
       }
       if (!drawingListRes.ok) {
         throw new Error(drawingListData.error ?? '図面一覧の取得に失敗しました')
-      }
-      if (!contractorRes.ok) {
-        throw new Error(contractorData.error ?? '業者一覧の取得に失敗しました')
-      }
-      if (!issueRes.ok) {
-        throw new Error(issueData.error ?? '指摘一覧の取得に失敗しました')
       }
 
       const resolvedContractors =
@@ -195,37 +192,93 @@ export function PdfExportPage() {
           ? (contractorData.contractors ?? [])
           : FALLBACK_CONTRACTORS
 
+      if (!contractorRes.ok) {
+        console.error('pdf export page load error:', contractorData.error ?? '業者情報を取得できませんでした')
+      }
+
+      const sortedDrawingsList = sortDrawingsByFloorLabel(drawingListData.drawings ?? [])
+      if (sortedDrawingsList.length === 0) {
+        throw new Error('対象図面が見つかりませんでした')
+      }
+
       const drawingFromList =
-        (drawingListData.drawings ?? []).find((item) => item.id === drawingId) ?? null
-      const resolvedDrawing = issueData.drawing
-        ? {
-            ...drawingFromList,
-            ...issueData.drawing,
-            storage_path: issueData.drawing.storage_path ?? issueData.drawing.file_path ?? null,
+        drawingId != null
+          ? sortedDrawingsList.find((item) => item.id === drawingId) ?? null
+          : null
+
+      if (drawingId && !drawingFromList) {
+        throw new Error('対象図面が見つかりませんでした')
+      }
+
+      const previewDrawingId = drawingFromList?.id ?? sortedDrawingsList[0]?.id
+      if (!previewDrawingId) {
+        throw new Error('対象図面が見つかりませんでした')
+      }
+
+      const issueResults = await Promise.all(
+        sortedDrawingsList.map(async (item) => {
+          const issueRes = await authedFetch(`/api/drawings/${item.id}/issues`)
+          const issueData = (await issueRes.json()) as { issues?: Issue[]; error?: string }
+          if (!issueRes.ok) {
+            console.error('pdf export page load error:', issueData.error ?? '指摘情報を取得できませんでした')
+            return [] as Issue[]
           }
-        : drawingFromList
+          return issueData.issues ?? []
+        }),
+      )
+      const allIssues = issueResults.flat()
+
+      const resolvedDrawing = await loadDrawingWithSignedUrl(
+        previewDrawingId,
+        drawingFromList ?? sortedDrawingsList[0] ?? null,
+      )
 
       if (!resolvedDrawing) {
-        throw new Error('対象図面が見つかりません')
+        throw new Error('対象図面が見つかりませんでした')
       }
 
       setProject(projectData.project)
-      setDrawings(drawingListData.drawings ?? [])
+      setDrawings(sortedDrawingsList)
       setDrawing(resolvedDrawing)
       setContractors(resolvedContractors)
-      setIssues(issueData.issues ?? [])
-      setSelectedFloor(resolvedDrawing.floor_label)
+      setIssues(allIssues)
+      setSelectedFloor(drawingId && resolvedDrawing ? resolvedDrawing.floor_label : 'all')
     } catch (error) {
-      console.error('pdf export navigation error:', error)
-      setLoadError('PDF出力に必要な情報が取得できません')
+      console.error('pdf export page load error:', error)
+      const message = error instanceof Error ? error.message : 'PDF出力に必要な情報が取得できません'
+      setLoadError(message)
     } finally {
       setLoading(false)
     }
-  }, [drawingId, projectId])
+  }, [drawingId, loadDrawingWithSignedUrl, projectId])
 
   useEffect(() => {
     if (user) void loadData()
   }, [user, loadData])
+
+  useEffect(() => {
+    if (loading || !drawings.length) return
+
+    const updatePreviewDrawing = async () => {
+      const defaultDrawing =
+        (drawingId ? drawings.find((item) => item.id === drawingId) : null) ?? drawings[0] ?? null
+
+      const targetDrawing =
+        selectedFloor === 'all'
+          ? defaultDrawing
+          : drawings.find((item) => item.floor_label === selectedFloor) ?? defaultDrawing
+
+      if (!targetDrawing) return
+      if (drawing?.id === targetDrawing.id && drawing.signed_url) return
+
+      const resolved = await loadDrawingWithSignedUrl(targetDrawing.id, targetDrawing)
+      if (resolved) {
+        setDrawing(resolved)
+      }
+    }
+
+    void updatePreviewDrawing()
+  }, [drawing?.id, drawing?.signed_url, drawingId, drawings, loadDrawingWithSignedUrl, loading, selectedFloor])
 
   const sortedDrawings = useMemo(() => sortDrawingsByFloorLabel(drawings), [drawings])
   const floors = useMemo(() => sortedDrawings.map((item) => item.floor_label), [sortedDrawings])
@@ -300,6 +353,21 @@ export function PdfExportPage() {
     return 'contractor' as const
   }, [exportTarget])
 
+  const contractorSelectValue = useMemo(() => {
+    if (exportTarget === 'all') return 'all'
+    if (exportTarget === 'unassigned') return UNASSIGNED_CONTRACTOR_KEY
+    if (exportTarget === 'common') return COMMON_CONTRACTOR_KEY
+    return exportContractorId
+  }, [exportTarget, exportContractorId])
+
+  useEffect(() => {
+    console.log('pdf export condition:', {
+      selectedContractor: contractorSelectValue,
+      selectedFloor,
+      exportContentType: exportContent,
+    })
+  }, [contractorSelectValue, selectedFloor, exportContent])
+
   useEffect(() => {
     console.log('pdf selected contractor:', pdfExportSplit.selectedContractor)
     console.log('pdf selected issues:', pdfExportSplit.selectedIssues)
@@ -328,21 +396,33 @@ export function PdfExportPage() {
     setExportContractorId(value)
   }
 
-  const contractorSelectValue = useMemo(() => {
-    if (exportTarget === 'all') return 'all'
-    if (exportTarget === 'unassigned') return UNASSIGNED_CONTRACTOR_KEY
-    if (exportTarget === 'common') return COMMON_CONTRACTOR_KEY
-    return exportContractorId
-  }, [exportTarget, exportContractorId])
-
   const noop = useCallback(() => {}, [])
 
   const handlePdfExport = useCallback(async () => {
     try {
       setIsExporting(true)
-      console.log('pdf export start')
 
-      const targetIssues = pdfExportSplit.selectedIssues
+      const {
+        separateCommonPage,
+        commonIssues,
+        drawingIssues,
+        selectedIssues,
+        exportContractorLabel,
+        photoDetailIssues,
+      } = pdfExportSplit
+
+      console.log('pdf export start:', {
+        projectId,
+        drawingId: drawing?.id ?? drawingId,
+        selectedContractor: contractorSelectValue,
+        selectedFloor,
+        exportContentType: exportContent,
+        selectedIssues,
+        commonIssues,
+        drawingIssues,
+      })
+
+      const targetIssues = selectedIssues
       const pendingCount = targetIssues.filter(
         (issue) => normalizeIssueStatus(issue.status) === '未対応',
       ).length
@@ -358,13 +438,6 @@ export function PdfExportPage() {
       if (exportTarget === 'contractor' && exportContractorId === 'all') {
         throw new Error('出力する業者を選択してください')
       }
-
-      const {
-        separateCommonPage,
-        commonIssues,
-        exportContractorLabel,
-        photoDetailIssues,
-      } = pdfExportSplit
 
       const includeLists = exportContent === 'drawing_and_list'
       const includeDrawing = true
@@ -445,7 +518,17 @@ export function PdfExportPage() {
       setPhotoDetailExportData([])
       setIsExporting(false)
     }
-  }, [exportContent, exportContractorId, exportTarget, pdfExportSplit])
+  }, [
+    contractorSelectValue,
+    drawing?.id,
+    drawingId,
+    exportContent,
+    exportContractorId,
+    exportTarget,
+    pdfExportSplit,
+    projectId,
+    selectedFloor,
+  ])
 
   const backHref =
     projectId && drawingId
@@ -454,12 +537,12 @@ export function PdfExportPage() {
         ? `/projects/${projectId}`
         : '/projects'
 
-  if (!projectId || !drawingId) {
+  if (!projectId) {
     return (
       <div className="flex h-screen items-center justify-center bg-background p-6">
         <Card className="max-w-md">
           <CardContent className="p-6 text-center text-sm text-destructive">
-            PDF出力に必要な情報が取得できません
+            案件情報を取得できませんでした
           </CardContent>
         </Card>
       </div>
