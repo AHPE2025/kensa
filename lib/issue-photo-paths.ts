@@ -49,6 +49,8 @@ export function resolvePhotoUploadTenantId(options: {
   drawingTenantId?: string | null
   projectTenantId?: string | null
   profileTenantId?: string | null
+  /** API ログインユーザーの tenant_id（profiles 等） */
+  apiTenantId?: string | null
 }): string | null {
   const drawing = options.drawingTenantId?.trim()
   if (drawing) return drawing
@@ -56,5 +58,7 @@ export function resolvePhotoUploadTenantId(options: {
   if (project) return project
   const profile = options.profileTenantId?.trim()
   if (profile) return profile
+  const api = options.apiTenantId?.trim()
+  if (api) return api
   return null
 }

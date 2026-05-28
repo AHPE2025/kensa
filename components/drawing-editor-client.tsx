@@ -19,7 +19,10 @@ import {
 } from '@/components/ui/alert-dialog'
 import { authedFetch } from '@/lib/authed-fetch'
 import { createTempIssueFolderId, resolvePhotoUploadTenantId } from '@/lib/issue-photo-paths'
-import { uploadIssuePhotoFromClient } from '@/lib/issue-photos-client'
+import {
+  attachIssuePhotoDisplayUrlsClient,
+  uploadIssuePhotoFromClient,
+} from '@/lib/issue-photos-client'
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { useEditorStore } from '@/lib/stores/editor-store'
 import { useAuthStore } from '@/lib/stores/auth-store'
@@ -169,9 +172,17 @@ export default function DrawingEditorClient() {
     if (!loadingAuth && !user) router.replace('/login')
   }, [loadingAuth, user, router])
 
+  const parseApiResponse = useCallback(async <T,>(response: Response): Promise<T & { error?: string }> => {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      return (await response.json()) as T & { error?: string }
+    }
+    return { error: await response.text() } as T & { error?: string }
+  }, [])
+
   const refetchIssues = async () => {
     const issueRes = await authedFetch(`/api/drawings/${drawingId}/issues`)
-    const issueData = (await issueRes.json()) as IssueResponse
+    const issueData = await parseApiResponse<IssueResponse>(issueRes)
     if (!issueRes.ok) {
       console.error('create issue error:', issueData.error ?? '指摘再取得失敗')
       return false
@@ -583,20 +594,13 @@ export default function DrawingEditorClient() {
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
   const isFallbackContractor = useCallback((contractorId: string) => contractorId.startsWith('fallback-'), [])
 
-  const parseApiResponse = useCallback(async <T,>(response: Response): Promise<T & { error?: string }> => {
-    const contentType = response.headers.get('content-type') || ''
-    if (contentType.includes('application/json')) {
-      return (await response.json()) as T & { error?: string }
-    }
-    return { error: await response.text() } as T & { error?: string }
-  }, [])
-
   const resolveIssuePhotoTenantId = useCallback(
     (drawingTenantId?: string | null) =>
       resolvePhotoUploadTenantId({
         drawingTenantId,
         projectTenantId: project?.tenant_id,
         profileTenantId,
+        apiTenantId: profileTenantId,
       }),
     [profileTenantId, project?.tenant_id],
   )
@@ -913,8 +917,9 @@ export default function DrawingEditorClient() {
     }
   }
 
-  const startEditIssue = useCallback((issue: Issue) => {
-    setEditingIssue(issue)
+  const startEditIssue = useCallback(async (issue: Issue) => {
+    const issueWithPhotoUrls = await attachIssuePhotoDisplayUrlsClient(issue)
+    setEditingIssue(issueWithPhotoUrls)
     setIssueModalOpen(true)
   }, [])
 

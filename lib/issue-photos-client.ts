@@ -31,7 +31,7 @@ export async function uploadIssuePhotoFromClient(
     console.log('after photo upload path:', path)
   }
 
-  const { error } = await supabase.storage.from(ISSUE_PHOTOS_BUCKET).upload(path, file, {
+  const { data, error } = await supabase.storage.from(ISSUE_PHOTOS_BUCKET).upload(path, file, {
     cacheControl: '3600',
     upsert: false,
     contentType: file.type || 'image/jpeg',
@@ -39,7 +39,30 @@ export async function uploadIssuePhotoFromClient(
   if (error) {
     throw error
   }
-  return path
+  return data?.path ?? path
+}
+
+export async function attachIssuePhotoDisplayUrlsClient<
+  T extends { before_photo_path?: string | null; after_photo_path?: string | null },
+>(issue: T): Promise<T & { before_photo_url: string | null; after_photo_url: string | null }> {
+  let before_photo_url: string | null = null
+  let after_photo_url: string | null = null
+
+  if (issue.before_photo_path) {
+    console.log('create before photo signed url:', issue.before_photo_path)
+    before_photo_url = await createIssuePhotoSignedUrlClient(issue.before_photo_path)
+  }
+
+  if (issue.after_photo_path) {
+    console.log('create after photo signed url:', issue.after_photo_path)
+    after_photo_url = await createIssuePhotoSignedUrlClient(issue.after_photo_path)
+  }
+
+  return {
+    ...issue,
+    before_photo_url,
+    after_photo_url,
+  }
 }
 
 export async function createIssuePhotoSignedUrlClient(
@@ -74,11 +97,13 @@ export async function createPhotoSignedUrlsForExport(
       let afterError = false
 
       if (issue.before_photo_path) {
+        console.log('create before photo signed url:', issue.before_photo_path)
         before_photo_url = await createIssuePhotoSignedUrlClient(issue.before_photo_path)
         if (!before_photo_url) beforeError = true
       }
 
       if (issue.after_photo_path) {
+        console.log('create after photo signed url:', issue.after_photo_path)
         after_photo_url = await createIssuePhotoSignedUrlClient(issue.after_photo_path)
         if (!after_photo_url) afterError = true
       }

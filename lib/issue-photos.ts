@@ -37,12 +37,24 @@ export async function uploadIssuePhotoFile(
   return path
 }
 
-export async function createIssuePhotoSignedUrl(client: SupabaseClient, path: string | null | undefined) {
+export async function createIssuePhotoSignedUrl(
+  client: SupabaseClient,
+  path: string | null | undefined,
+  kind?: 'before' | 'after',
+) {
   if (!path) return null
+  if (kind === 'before') {
+    console.log('create before photo signed url:', path)
+  } else if (kind === 'after') {
+    console.log('create after photo signed url:', path)
+  }
   const { data, error } = await client.storage
     .from(ISSUE_PHOTOS_BUCKET)
     .createSignedUrl(path, DRAWING_SIGNED_URL_TTL_SECONDS)
-  if (error) return null
+  if (error) {
+    console.error('create photo signed url error:', error)
+    return null
+  }
   return data?.signedUrl ?? null
 }
 
@@ -51,8 +63,8 @@ export async function attachIssuePhotoSignedUrls<T extends { before_photo_path?:
   issue: T,
 ) {
   const [before_photo_url, after_photo_url] = await Promise.all([
-    createIssuePhotoSignedUrl(client, issue.before_photo_path),
-    createIssuePhotoSignedUrl(client, issue.after_photo_path),
+    createIssuePhotoSignedUrl(client, issue.before_photo_path, 'before'),
+    createIssuePhotoSignedUrl(client, issue.after_photo_path, 'after'),
   ])
   return {
     ...issue,
