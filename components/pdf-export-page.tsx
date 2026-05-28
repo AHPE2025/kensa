@@ -530,6 +530,11 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900 md:text-xl">検査表PDF出力</h1>
+              <p className="mt-1 text-xs text-slate-500">
+                案件ID: {projectId}
+                <span className="mx-2 text-slate-300">|</span>
+                図面ID: {drawingId}
+              </p>
               <p className="mt-1 text-sm text-slate-600">
                 {project.name}
                 <span className="mx-2 text-slate-300">|</span>

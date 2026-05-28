@@ -473,22 +473,36 @@ export default function DrawingEditorClient() {
     return 'contractor' as const
   }, [exportTarget])
 
-  const handleNavigateToPdfExport = useCallback(() => {
-    const resolvedProjectId = routeProjectId ?? project?.id
-    const resolvedDrawingId = routeDrawingId ?? currentDrawing?.id
+  const handleOpenPdfExportPage = useCallback(() => {
+    console.log('PDF出力ボタンがクリックされました')
+    console.log('projectId:', projectId)
+    console.log('currentDrawingId:', currentDrawing?.id)
+    console.log('selectedDrawingId:', drawingId)
+    console.log('drawingId:', drawingId)
 
-    console.log('pdf export condition:', {
-      exportCondition,
-      projectId: resolvedProjectId,
-      drawingId: resolvedDrawingId,
-    })
+    const resolvedProjectId = routeProjectId ?? project?.id ?? projectId
+    const resolvedDrawingId =
+      currentDrawing?.id ??
+      drawingId ??
+      (currentDrawingIndex >= 0 ? sortedDrawings[currentDrawingIndex]?.id : undefined) ??
+      routeDrawingId
 
     if (!resolvedProjectId) {
+      console.error('PDF出力ページへ移動できません: projectId が取得できていません', {
+        routeProjectId,
+        projectId: project?.id,
+      })
       toast.error('案件情報が取得できていないため、PDF出力ページへ移動できません。')
       return
     }
 
     if (!resolvedDrawingId) {
+      console.error('PDF出力ページへ移動できません: drawingId が取得できていません', {
+        currentDrawingId: currentDrawing?.id,
+        drawingId,
+        currentDrawingIndex,
+        sortedDrawingIds: sortedDrawings.map((item) => item.id),
+      })
       toast.error('図面情報が取得できていないため、PDF出力ページへ移動できません。')
       return
     }
@@ -500,7 +514,17 @@ export default function DrawingEditorClient() {
       exportUrl,
     })
     router.push(exportUrl)
-  }, [currentDrawing?.id, exportCondition, project?.id, routeDrawingId, routeProjectId, router])
+  }, [
+    currentDrawing?.id,
+    currentDrawingIndex,
+    drawingId,
+    project?.id,
+    projectId,
+    routeDrawingId,
+    routeProjectId,
+    router,
+    sortedDrawings,
+  ])
 
   const handlePdfExport = useCallback(async () => {
     try {
@@ -1215,10 +1239,14 @@ export default function DrawingEditorClient() {
                         <p className="text-xs text-red-600">{exportError}</p>
                       ) : null}
                       <Button
+                        type="button"
                         className="w-full bg-blue-600 hover:bg-blue-700"
-                        onClick={handleNavigateToPdfExport}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          handleOpenPdfExportPage()
+                        }}
                       >
-                        PDF出力
+                        PDF出力ページへ進む
                       </Button>
                     </CardContent>
                   </Card>
@@ -1363,11 +1391,15 @@ export default function DrawingEditorClient() {
               業者フィルタ
             </Button>
             <Button
+              type="button"
               className="h-12 bg-blue-600 hover:bg-blue-700"
-              onClick={handleNavigateToPdfExport}
+              onClick={(event) => {
+                event.preventDefault()
+                handleOpenPdfExportPage()
+              }}
             >
               <Download className="mr-2 h-5 w-5" />
-              PDF出力
+              PDF出力ページへ進む
             </Button>
             <Button
               variant="destructive"
