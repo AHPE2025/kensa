@@ -93,12 +93,20 @@ function clampZoom(value: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
 }
 
+function resolveRouteParam(value: string | string[] | undefined): string | undefined {
+  if (typeof value === 'string') return value || undefined
+  if (Array.isArray(value)) return value[0] || undefined
+  return undefined
+}
+
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 export default function DrawingEditorClient() {
   const params = useParams<{ id: string; drawingId: string }>()
-  const projectId = params.id
-  const drawingId = params.drawingId
+  const routeProjectId = resolveRouteParam(params.id)
+  const routeDrawingId = resolveRouteParam(params.drawingId)
+  const projectId = routeProjectId ?? ''
+  const drawingId = routeDrawingId ?? ''
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const loadingAuth = useAuthStore((s) => s.loading)
@@ -466,18 +474,33 @@ export default function DrawingEditorClient() {
   }, [exportTarget])
 
   const handleNavigateToPdfExport = useCallback(() => {
-    console.log('pdf export condition:', exportCondition)
+    const resolvedProjectId = routeProjectId ?? project?.id
+    const resolvedDrawingId = routeDrawingId ?? currentDrawing?.id
 
-    if (!projectId || !drawingId) {
-      console.error('missing pdf export navigation params:', { projectId, drawingId })
-      toast.error('PDF出力ページへ移動できません。案件情報または図面情報が不足しています。')
+    console.log('pdf export condition:', {
+      exportCondition,
+      projectId: resolvedProjectId,
+      drawingId: resolvedDrawingId,
+    })
+
+    if (!resolvedProjectId) {
+      toast.error('案件情報が取得できていないため、PDF出力ページへ移動できません。')
       return
     }
 
-    const exportUrl = `/projects/${projectId}/export?drawingId=${drawingId}`
-    console.log('navigate to pdf export page:', { projectId, drawingId, exportUrl })
+    if (!resolvedDrawingId) {
+      toast.error('図面情報が取得できていないため、PDF出力ページへ移動できません。')
+      return
+    }
+
+    const exportUrl = `/projects/${resolvedProjectId}/export?drawingId=${resolvedDrawingId}`
+    console.log('navigate to pdf export page:', {
+      projectId: resolvedProjectId,
+      drawingId: resolvedDrawingId,
+      exportUrl,
+    })
     router.push(exportUrl)
-  }, [drawingId, exportCondition, projectId, router])
+  }, [currentDrawing?.id, exportCondition, project?.id, routeDrawingId, routeProjectId, router])
 
   const handlePdfExport = useCallback(async () => {
     try {
@@ -1193,10 +1216,9 @@ export default function DrawingEditorClient() {
                       ) : null}
                       <Button
                         className="w-full bg-blue-600 hover:bg-blue-700"
-                        disabled={isExporting}
-                        onClick={() => void handlePdfExport()}
+                        onClick={handleNavigateToPdfExport}
                       >
-                        {isExporting ? 'PDF作成中...' : 'PDF出力'}
+                        PDF出力
                       </Button>
                     </CardContent>
                   </Card>
@@ -1213,6 +1235,7 @@ export default function DrawingEditorClient() {
                             address={project?.address ?? '-'}
                             inspectionDate={inspectionDateLabel}
                             exportDate={exportDateLabel}
+                            floorLabel={currentDrawing?.floor_label ?? '1F'}
                             badgeLabel={pdfExportSplit.exportContractorLabel}
                             badgeVariant={selectedTableBadgeVariant}
                             issues={pdfExportSplit.selectedIssues}
@@ -1228,6 +1251,7 @@ export default function DrawingEditorClient() {
                               address={project?.address ?? '-'}
                               inspectionDate={inspectionDateLabel}
                               exportDate={exportDateLabel}
+                              floorLabel={currentDrawing?.floor_label ?? '1F'}
                               badgeLabel="共通"
                               badgeVariant="common"
                               issues={pdfExportSplit.commonIssues}
@@ -1409,6 +1433,7 @@ export default function DrawingEditorClient() {
             address={project?.address ?? '-'}
             inspectionDate={inspectionDateLabel}
             exportDate={exportDateLabel}
+            floorLabel={currentDrawing?.floor_label ?? '1F'}
             badgeLabel={pdfExportSplit.exportContractorLabel}
             badgeVariant={selectedTableBadgeVariant}
             issues={pdfExportSplit.selectedIssues}
@@ -1422,6 +1447,7 @@ export default function DrawingEditorClient() {
               address={project?.address ?? '-'}
               inspectionDate={inspectionDateLabel}
               exportDate={exportDateLabel}
+              floorLabel={currentDrawing?.floor_label ?? '1F'}
               badgeLabel="共通"
               badgeVariant="common"
               issues={pdfExportSplit.commonIssues}
