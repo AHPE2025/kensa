@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient, getAuthedUser } from '@/lib/api-auth'
 import { toAsciiFileName } from '@/lib/filename'
 import {
-  DRAWING_IMAGES_BUCKET,
-  DRAWING_SIGNED_URL_TTL_SECONDS,
-  DRAWINGS_PDF_BUCKET,
-} from '@/lib/storage'
+  createDrawingPdfSignedUrl,
+  createDrawingPreviewSignedUrl,
+} from '@/lib/drawing-signed-url'
+import { DRAWING_IMAGES_BUCKET, DRAWINGS_PDF_BUCKET } from '@/lib/storage'
 import { createServiceRoleClient } from '@/lib/supabase-server'
 
 type Params = { params: Promise<{ id: string }> }
@@ -57,16 +57,16 @@ export async function GET(request: NextRequest, { params }: Params) {
   const rows = await Promise.all(
     (drawings ?? []).map(async (d) => {
       const pageImages = Array.isArray(d.page_images) ? (d.page_images as string[]) : []
-      const previewImagePath = pageImages[0] ?? null
-      const { data: signed } = previewImagePath
-        ? await client.storage
-            .from(DRAWING_IMAGES_BUCKET)
-            .createSignedUrl(previewImagePath, DRAWING_SIGNED_URL_TTL_SECONDS)
-        : { data: null as { signedUrl?: string | null } | null }
+      const [imageSignedUrl, pdfSignedUrl] = await Promise.all([
+        createDrawingPreviewSignedUrl(client, { ...d, page_images: pageImages }),
+        createDrawingPdfSignedUrl(client, d),
+      ])
       return {
         ...d,
         issue_count: countMap.get(d.id) ?? 0,
-        signed_url: signed?.signedUrl ?? null,
+        signed_url: imageSignedUrl,
+        image_signed_url: imageSignedUrl,
+        pdf_signed_url: pdfSignedUrl,
         storage_path: d.original_pdf_path ?? d.file_path ?? null,
         file_name:
           d.file_name ??

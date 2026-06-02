@@ -175,16 +175,13 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   }, [loadingAuth, user, router])
 
   const loadDrawingPdfUrl = useCallback(async (targetDrawingId: string): Promise<string | null> => {
-    const issueRes = await authedFetch(`/api/drawings/${targetDrawingId}/issues`)
-    const issueData = (await issueRes.json()) as {
-      drawing?: DrawingRow
-      error?: string
-    }
-    if (!issueRes.ok) {
-      console.error('drawing pdf url load error:', issueData.error ?? targetDrawingId)
+    const res = await authedFetch(`/api/drawings/${targetDrawingId}/pdf-url`)
+    const data = (await res.json()) as { signedUrl?: string | null; error?: string }
+    if (!res.ok) {
+      console.error('drawing pdf url load error:', data.error ?? targetDrawingId)
       return null
     }
-    return issueData.drawing?.signed_url ?? null
+    return data.signedUrl ?? null
   }, [])
 
   const loadData = useCallback(async () => {
@@ -228,7 +225,8 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       )
       const sortedDrawingsList = sortDrawingsByFloorLabel(drawingListData.drawings ?? []).map((drawing) => ({
         ...drawing,
-        image_signed_url: drawing.signed_url ?? null,
+        image_signed_url: drawing.image_signed_url ?? drawing.signed_url ?? null,
+        pdf_signed_url: drawing.pdf_signed_url ?? null,
       }))
 
       const issueResults = await Promise.all(
@@ -244,16 +242,22 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       )
       const allIssues = issueResults.flat()
 
-      const pdfUrlEntries = await Promise.all(
+      const drawingsWithUrls = await Promise.all(
         sortedDrawingsList.map(async (drawing) => {
-          const pdfSignedUrl = await loadDrawingPdfUrl(drawing.id)
-          return [drawing.id, pdfSignedUrl] as const
+          let pdfSignedUrl = drawing.pdf_signed_url ?? null
+          if (!pdfSignedUrl) {
+            pdfSignedUrl = await loadDrawingPdfUrl(drawing.id)
+          }
+          console.log('drawing url resolved', {
+            drawingId: drawing.id,
+            file_path: drawing.file_path,
+            pdf_signed_url: pdfSignedUrl ? `${pdfSignedUrl.slice(0, 80)}...` : null,
+            image_signed_url: drawing.image_signed_url ? 'ok' : null,
+            signed_url: drawing.signed_url ? 'ok' : null,
+          })
+          return { ...drawing, pdf_signed_url: pdfSignedUrl }
         }),
       )
-      const drawingsWithUrls = sortedDrawingsList.map((drawing) => ({
-        ...drawing,
-        pdf_signed_url: pdfUrlEntries.find(([id]) => id === drawing.id)?.[1] ?? null,
-      }))
 
       const initialFloor =
         urlDrawingId != null

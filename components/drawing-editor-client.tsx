@@ -516,16 +516,13 @@ export default function DrawingEditorClient() {
   ])
 
   const loadDrawingPdfUrl = useCallback(async (targetDrawingId: string): Promise<string | null> => {
-    const issueRes = await authedFetch(`/api/drawings/${targetDrawingId}/issues`)
-    const issueData = (await issueRes.json()) as {
-      drawing?: Drawing & { signed_url?: string | null }
-      error?: string
-    }
-    if (!issueRes.ok) {
-      console.error('drawing pdf url load error:', issueData.error ?? targetDrawingId)
+    const res = await authedFetch(`/api/drawings/${targetDrawingId}/pdf-url`)
+    const data = (await res.json()) as { signedUrl?: string | null; error?: string }
+    if (!res.ok) {
+      console.error('drawing pdf url load error:', data.error ?? targetDrawingId)
       return null
     }
-    return issueData.drawing?.signed_url ?? null
+    return data.signedUrl ?? null
   }, [])
 
   const handlePdfExport = useCallback(async () => {
@@ -606,7 +603,7 @@ export default function DrawingEditorClient() {
           const canvas = await renderDrawingToCanvas(
             {
               ...currentDrawing,
-              pdf_signed_url: currentDrawing.signed_url,
+              pdf_signed_url: currentDrawing.signed_url ?? null,
             },
             issuesForDrawing,
             {

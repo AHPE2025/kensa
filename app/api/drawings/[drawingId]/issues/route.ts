@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
 import { attachIssuePhotoSignedUrls } from '@/lib/issue-photos'
 import { normalizeIssueStatus } from '@/lib/issue-status'
-import { DRAWING_SIGNED_URL_TTL_SECONDS } from '@/lib/storage'
+import { createDrawingPdfSignedUrl } from '@/lib/drawing-signed-url'
 
 type Params = { params: Promise<{ drawingId: string }> }
 
@@ -63,17 +63,12 @@ export async function GET(request: NextRequest, { params }: Params) {
 
   let signedUrl: string | null = null
   if (drawing) {
-    console.log("drawing:", drawing)
-    console.log("resolved bucket:", "drawings-pdf")
-    console.log("resolved file_path:", drawing.file_path)
-    const { data, error } = await client.storage
-      .from('drawings-pdf')
-      .createSignedUrl(drawing.file_path, DRAWING_SIGNED_URL_TTL_SECONDS)
-    if (error) {
-      console.error("pdf signed url error:", error)
-    }
-    signedUrl = data?.signedUrl ?? null
-    console.log("signedUrl:", signedUrl)
+    signedUrl = await createDrawingPdfSignedUrl(client, drawing)
+    console.log('drawing pdf signedUrl:', signedUrl ? 'ok' : 'null', {
+      drawingId: drawing.id,
+      file_path: drawing.file_path,
+      original_pdf_path: drawing.original_pdf_path,
+    })
   }
   const drawingWithStoragePath = drawing
     ? {
