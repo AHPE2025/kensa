@@ -49,8 +49,13 @@ export function getFilteredIssues(
   return [...split.selectedIssues, ...split.commonIssues]
 }
 
+function resolveIssueDrawingId(issue: ExportIssue): string {
+  const record = issue as ExportIssue & { drawingId?: string | null }
+  return record.drawing_id ?? record.drawingId ?? ''
+}
+
 export function getIssuesByDrawingId(filteredIssues: ExportIssue[], drawingId: string): ExportIssue[] {
-  return filteredIssues.filter((issue) => issue.drawing_id === drawingId)
+  return filteredIssues.filter((issue) => resolveIssueDrawingId(issue) === drawingId)
 }
 
 export function getTargetDrawings<T extends Drawing>(
@@ -59,7 +64,9 @@ export function getTargetDrawings<T extends Drawing>(
   selectedFloor: 'all' | string,
 ): T[] {
   const sorted = sortDrawingsByFloorLabel(drawings)
-  const drawingIdsWithIssues = new Set(filteredIssues.map((issue) => issue.drawing_id))
+  const drawingIdsWithIssues = new Set(
+    filteredIssues.map((issue) => resolveIssueDrawingId(issue)).filter(Boolean),
+  )
   return sorted.filter((drawing) => {
     if (!drawingIdsWithIssues.has(drawing.id)) return false
     if (selectedFloor !== 'all' && drawing.floor_label !== selectedFloor) return false

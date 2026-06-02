@@ -26,10 +26,22 @@ export function resolveDrawingBackground(drawing: DrawingForRender | null): {
   url: string
 } | null {
   if (!drawing) return null
-  const pdfUrl = drawing.pdf_signed_url ?? null
+
+  const pageImages = Array.isArray(drawing.page_images) ? drawing.page_images : []
+  if (pageImages.length > 0) {
+    const imageUrl = drawing.image_signed_url ?? null
+    if (imageUrl) return { type: 'image', url: imageUrl }
+  }
+
+  const pdfUrl =
+    drawing.pdf_signed_url ??
+    drawing.signed_url ??
+    null
   if (pdfUrl) return { type: 'pdf', url: pdfUrl }
-  const imageUrl = drawing.image_signed_url ?? drawing.signed_url ?? null
-  if (imageUrl) return { type: 'image', url: imageUrl }
+
+  const fallbackImageUrl = drawing.image_signed_url ?? null
+  if (fallbackImageUrl) return { type: 'image', url: fallbackImageUrl }
+
   return null
 }
 
@@ -294,6 +306,13 @@ export async function renderDrawingToCanvas(
   const pageIndex = options?.pageIndex ?? 0
   const rotation = normalizeRotation(drawing.rotation)
 
+  console.log('render drawing start', {
+    drawingId: drawing.id,
+    signed_url: drawing.signed_url ?? null,
+    file_path: drawing.file_path,
+    storage_path: (drawing as DrawingForRender & { storage_path?: string | null }).storage_path ?? null,
+  })
+
   let background = resolveDrawingBackground(drawing)
   if (!background && options?.resolvePdfUrl) {
     const signedUrl = await options.resolvePdfUrl(drawing.id)
@@ -310,12 +329,6 @@ export async function renderDrawingToCanvas(
   if (!background) {
     throw new Error(`図面URLを取得できませんでした（${drawing.floor_label}）`)
   }
-
-  console.log('renderDrawingToCanvas start', {
-    drawingId: drawing.id,
-    file_path: drawing.file_path,
-    backgroundType: background.type,
-  })
 
   const { pdfCanvas, stageWidth, stageHeight } =
     background.type === 'pdf'
@@ -339,11 +352,7 @@ export async function renderDrawingToCanvas(
 
   drawIssuePinsOnCanvas(stageCtx, issues, stageWidth, stageHeight, pageIndex)
 
-  console.log('drawing canvas completed', {
-    drawingId: drawing.id,
-    width: stageCanvas.width,
-    height: stageCanvas.height,
-  })
+  console.log('render drawing completed', drawing.id)
 
   return stageCanvas
 }

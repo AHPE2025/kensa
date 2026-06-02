@@ -70,11 +70,13 @@ export async function GET(request: NextRequest, { params }: Params) {
       original_pdf_path: drawing.original_pdf_path,
     })
   }
+  const storagePath =
+    drawing?.file_path ?? drawing?.original_pdf_path ?? null
   const drawingWithStoragePath = drawing
     ? {
         ...drawing,
-        storage_path: drawing.file_path ?? null,
-        original_pdf_path: drawing.file_path ?? null,
+        storage_path: storagePath,
+        original_pdf_path: storagePath,
         page_images: Array.isArray(drawing.page_images) ? (drawing.page_images as string[]) : [],
         signed_page_urls: [],
         signed_url: signedUrl,

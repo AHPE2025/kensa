@@ -45,10 +45,16 @@ import {
   normalizeExportContentType,
   waitForDomUpdate,
   waitForElementImages,
+  type ExportIssue,
   type PdfExportCondition,
   type PdfExportContentType,
   type PdfExportSplit,
 } from '@/lib/pdf-export-client'
+import {
+  getDrawingWithSignedUrl,
+  normalizeDrawingPdfUrl,
+  pickPdfSignedUrl,
+} from '@/lib/drawing-export-url'
 import { exportInspectionPdf } from '@/lib/inspection-pdf-export'
 import { InspectionListPreview } from '@/components/inspection-list-preview'
 import { PdfExportPhotoDetailPage, type PhotoDetailIssue } from '@/components/pdf-export-photo-detail'
@@ -156,6 +162,8 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   const [photoDetailExportData, setPhotoDetailExportData] = useState<PhotoDetailIssue[]>([])
   const [previewPhotoIssues, setPreviewPhotoIssues] = useState<PhotoDetailIssue[]>([])
   const [loadingPreviewPhotos, setLoadingPreviewPhotos] = useState(false)
+  const [previewDrawings, setPreviewDrawings] = useState<DrawingRow[]>([])
+  const [loadingPreviewDrawings, setLoadingPreviewDrawings] = useState(false)
 
   const [selectedExportTarget, setSelectedExportTarget] = useState<ExportTargetMode>('all')
   const [selectedContractorId, setSelectedContractorId] = useState<string>('')
@@ -175,14 +183,26 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   }, [loadingAuth, user, router])
 
   const loadDrawingPdfUrl = useCallback(async (targetDrawingId: string): Promise<string | null> => {
-    const res = await authedFetch(`/api/drawings/${targetDrawingId}/pdf-url`)
-    const data = (await res.json()) as { signedUrl?: string | null; error?: string }
+    const res = await authedFetch(`/api/drawings/${targetDrawingId}`)
+    const data = (await res.json()) as {
+      signedUrl?: string | null
+      signed_url?: string | null
+      pdf_signed_url?: string | null
+      error?: string
+    }
     if (!res.ok) {
       console.error('drawing pdf url load error:', data.error ?? targetDrawingId)
       return null
     }
-    return data.signedUrl ?? null
+    return pickPdfSignedUrl(data)
   }, [])
+
+  const resolveDrawingsWithSignedUrl = useCallback(
+    async (drawingsToResolve: DrawingRow[]) => {
+      return Promise.all(drawingsToResolve.map((drawing) => getDrawingWithSignedUrl(drawing)))
+    },
+    [],
+  )
 
   const loadData = useCallback(async () => {
     if (!projectId) {
@@ -223,11 +243,15 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         urlExportContractorId,
         resolvedContractors,
       )
-      const sortedDrawingsList = sortDrawingsByFloorLabel(drawingListData.drawings ?? []).map((drawing) => ({
-        ...drawing,
-        image_signed_url: drawing.image_signed_url ?? drawing.signed_url ?? null,
-        pdf_signed_url: drawing.pdf_signed_url ?? null,
-      }))
+      const sortedDrawingsList = sortDrawingsByFloorLabel(drawingListData.drawings ?? []).map((drawing) => {
+        const imageSignedUrl = drawing.image_signed_url ?? drawing.signed_url ?? null
+        const pdfSignedUrl = drawing.pdf_signed_url ?? pickPdfSignedUrl(drawing)
+        return normalizeDrawingPdfUrl({
+          ...drawing,
+          image_signed_url: imageSignedUrl,
+          pdf_signed_url: pdfSignedUrl,
+        })
+      })
 
       const issueResults = await Promise.all(
         sortedDrawingsList.map(async (item) => {
@@ -242,50 +266,51 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       )
       const allIssues = issueResults.flat()
 
-      const drawingsWithUrls = await Promise.all(
-        sortedDrawingsList.map(async (drawing) => {
-          let pdfSignedUrl = drawing.pdf_signed_url ?? null
-          if (!pdfSignedUrl) {
-            pdfSignedUrl = await loadDrawingPdfUrl(drawing.id)
-          }
-          console.log('drawing url resolved', {
-            drawingId: drawing.id,
-            file_path: drawing.file_path,
-            pdf_signed_url: pdfSignedUrl ? `${pdfSignedUrl.slice(0, 80)}...` : null,
-            image_signed_url: drawing.image_signed_url ? 'ok' : null,
-            signed_url: drawing.signed_url ? 'ok' : null,
-          })
-          return { ...drawing, pdf_signed_url: pdfSignedUrl }
-        }),
-      )
+      console.log('issues drawing ids', allIssues.map((issue) => ({
+        id: issue.id,
+        drawing_id: issue.drawing_id,
+        drawingId: (issue as Issue & { drawingId?: string }).drawingId,
+        floor: (issue as Issue & { floor?: string }).floor,
+        floor_label: issue.floor_label,
+        contractor_id: issue.contractor_id,
+        contractorId: (issue as Issue & { contractorId?: string }).contractorId,
+      })))
+      console.log('drawings ids', sortedDrawingsList.map((drawing) => ({
+        id: drawing.id,
+        floor_label: drawing.floor_label,
+        issue_count: drawing.issue_count,
+        signed_url: drawing.signed_url,
+        signedUrl: (drawing as DrawingRow & { signedUrl?: string }).signedUrl,
+        pdf_signed_url: drawing.pdf_signed_url,
+      })))
 
       const initialFloor =
         urlDrawingId != null
-          ? (drawingsWithUrls.find((drawing) => drawing.id === urlDrawingId)?.floor_label ?? 'all')
+          ? (sortedDrawingsList.find((drawing) => drawing.id === urlDrawingId)?.floor_label ?? 'all')
           : 'all'
 
       console.log('contractors:', resolvedContractors)
       console.log('issues:', allIssues)
-      console.log('project drawings:', drawingsWithUrls)
-      console.log('sorted drawings:', sortDrawingsByFloorLabel(drawingsWithUrls))
+      console.log('project drawings:', sortedDrawingsList)
+      console.log('sorted drawings:', sortDrawingsByFloorLabel(sortedDrawingsList))
       if (urlDrawingId) {
-        const currentDrawingIndex = drawingsWithUrls.findIndex((drawing) => drawing.id === urlDrawingId)
+        const currentDrawingIndex = sortedDrawingsList.findIndex((drawing) => drawing.id === urlDrawingId)
         console.log('current drawing index:', currentDrawingIndex)
         console.log('current drawing id:', urlDrawingId)
         console.log(
           'next drawing:',
-          currentDrawingIndex >= 0 && currentDrawingIndex < drawingsWithUrls.length - 1
-            ? drawingsWithUrls[currentDrawingIndex + 1]
+          currentDrawingIndex >= 0 && currentDrawingIndex < sortedDrawingsList.length - 1
+            ? sortedDrawingsList[currentDrawingIndex + 1]
             : null,
         )
         console.log(
           'prev drawing:',
-          currentDrawingIndex > 0 ? drawingsWithUrls[currentDrawingIndex - 1] : null,
+          currentDrawingIndex > 0 ? sortedDrawingsList[currentDrawingIndex - 1] : null,
         )
       }
 
       setProject(projectData.project)
-      setDrawings(drawingsWithUrls)
+      setDrawings(sortedDrawingsList)
       setContractors(resolvedContractors)
       setIssues(allIssues)
       setSelectedExportTarget(initialExportTarget)
@@ -299,7 +324,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     } finally {
       setLoading(false)
     }
-  }, [loadDrawingPdfUrl, projectId, urlDrawingId, urlExportContentType, urlExportContractorId, urlExportTarget])
+  }, [projectId, urlDrawingId, urlExportContentType, urlExportContractorId, urlExportTarget])
 
   useEffect(() => {
     if (user) void loadData()
@@ -353,6 +378,32 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   useEffect(() => {
     targetDrawingsRef.current = targetDrawings
   }, [targetDrawings])
+
+  useEffect(() => {
+    if (!includesDrawingPages(exportContent) || targetDrawings.length === 0) {
+      setPreviewDrawings([])
+      return
+    }
+
+    let cancelled = false
+    const loadPreviewDrawings = async () => {
+      setLoadingPreviewDrawings(true)
+      try {
+        const withUrls = await resolveDrawingsWithSignedUrl(targetDrawings)
+        if (!cancelled) setPreviewDrawings(withUrls)
+      } catch (error) {
+        console.error('preview drawing signed url error:', error)
+        if (!cancelled) setPreviewDrawings(targetDrawings)
+      } finally {
+        if (!cancelled) setLoadingPreviewDrawings(false)
+      }
+    }
+
+    void loadPreviewDrawings()
+    return () => {
+      cancelled = true
+    }
+  }, [exportContent, resolveDrawingsWithSignedUrl, targetDrawings])
 
   const getDrawingIssues = useCallback(
     (drawingId: string) => getIssuesByDrawingId(filteredIssues, drawingId),
@@ -440,9 +491,11 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   }
 
   const runPdfExport = useCallback(
-    async (options?: { filenameLabel?: string; skipEmpty?: boolean }): Promise<boolean> => {
+    async (
+      drawingsForExport: DrawingRow[],
+      options?: { filenameLabel?: string; skipEmpty?: boolean },
+    ): Promise<boolean> => {
       const split = pdfExportSplitRef.current
-      const drawingsForExport = targetDrawingsRef.current
       if (!split) return false
 
       const { photoDetailIssues } = split
@@ -526,7 +579,43 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         await delay(100)
 
         try {
-          const exported = await runPdfExport({ filenameLabel: target.label, skipEmpty: true })
+          const bulkCondition: PdfExportCondition = {
+            exportTarget: target.exportTarget,
+            exportContractorId: target.exportContractorId,
+            exportContentType: exportContent,
+          }
+          const bulkFiltered = getFilteredIssues(
+            numberedIssues,
+            bulkCondition,
+            contractors,
+            selectedFloor,
+            sortedDrawings,
+          )
+          if (bulkFiltered.length === 0) {
+            skippedCount += 1
+            continue
+          }
+
+          const bulkDrawingIds = new Set(
+            bulkFiltered
+              .map((issue) => issue.drawing_id ?? (issue as ExportIssue & { drawingId?: string }).drawingId)
+              .filter(Boolean),
+          )
+          const bulkTargetDrawings = sortedDrawings.filter((drawing) => bulkDrawingIds.has(drawing.id))
+          const bulkDrawingsWithSignedUrl = await resolveDrawingsWithSignedUrl(bulkTargetDrawings)
+
+          if (
+            includesDrawingPages(exportContent) &&
+            bulkDrawingsWithSignedUrl.some((drawing) => !drawing.signed_url)
+          ) {
+            console.error('Drawings missing signed_url (bulk)', bulkDrawingsWithSignedUrl)
+            throw new Error('図面URLを取得できませんでした')
+          }
+
+          const exported = await runPdfExport(bulkDrawingsWithSignedUrl, {
+            filenameLabel: target.label,
+            skipEmpty: true,
+          })
           if (exported) {
             successCount += 1
           } else {
@@ -562,7 +651,15 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       setPhotoDetailExportData([])
       setIsExporting(false)
     }
-  }, [contractors, issues, runPdfExport])
+  }, [
+    contractors,
+    exportContent,
+    numberedIssues,
+    resolveDrawingsWithSignedUrl,
+    runPdfExport,
+    selectedFloor,
+    sortedDrawings,
+  ])
 
   const handleExportPdf = useCallback(async () => {
     console.log('PDF export clicked')
@@ -576,35 +673,73 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       setIsExporting(true)
       setExportError(null)
 
-      console.log('PDF export conditions', {
+      console.log('PDF export condition', {
+        exportTarget: effectiveExportTarget,
+        exportContractorId: effectiveContractorId,
         exportContentType: exportContent,
-        exportContractorId: selectedExportTarget === 'contractor' ? selectedContractorId : 'all',
-        exportTarget: selectedExportTarget,
-        selectedFloor,
       })
 
-      const exported = await runPdfExport()
+      if (filteredIssues.length === 0) {
+        setExportError('選択条件に該当する指摘がありません。業者または出力対象を変更してください。')
+        return
+      }
+
+      const exportTargetDrawingIds = new Set(
+        filteredIssues.map((issue) => issue.drawing_id ?? (issue as ExportIssue & { drawingId?: string }).drawingId).filter(Boolean),
+      )
+      const drawingsForExport = sortedDrawings.filter((drawing) => exportTargetDrawingIds.has(drawing.id))
+
+      if (includesDrawingPages(exportContent) && drawingsForExport.length === 0) {
+        setExportError('出力対象の図面がありません。指摘と図面の紐付けを確認してください。')
+        return
+      }
+
+      console.log('PDF export filtered issues', filteredIssues)
+      console.log('PDF export target drawings before signed url', drawingsForExport)
+
+      const drawingsWithSignedUrl = await resolveDrawingsWithSignedUrl(drawingsForExport)
+      console.log('PDF export drawings with signed url', drawingsWithSignedUrl)
+
+      const invalidDrawings = drawingsWithSignedUrl.filter((drawing) => !drawing.signed_url)
+      if (includesDrawingPages(exportContent) && invalidDrawings.length > 0) {
+        console.error('Drawings missing signed_url', invalidDrawings)
+        setExportError('図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。')
+        return
+      }
+
+      targetDrawingsRef.current = drawingsWithSignedUrl
+
+      const exported = await runPdfExport(drawingsWithSignedUrl)
       if (!exported) {
-        throw new Error('出力対象の指摘がありません')
+        setExportError('選択条件に該当する指摘がありません。業者または出力対象を変更してください。')
+        return
       }
 
       console.log('PDF export completed')
       toast.success(`${pdfExportSplit.exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
       console.error('PDF export failed', error)
-      setExportError('PDF出力に失敗しました。図面データまたは描画処理を確認してください。')
-      toast.error('PDF出力に失敗しました')
+      const message =
+        error instanceof Error && error.message.includes('図面URL')
+          ? '図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。'
+          : 'PDF出力に失敗しました。図面データまたは描画処理を確認してください。'
+      setExportError(message)
+      toast.error(message)
     } finally {
       setPhotoDetailExportData([])
       setIsExporting(false)
     }
   }, [
+    effectiveContractorId,
+    effectiveExportTarget,
     exportContent,
+    filteredIssues,
     pdfExportSplit.exportContractorLabel,
+    resolveDrawingsWithSignedUrl,
     runPdfExport,
     selectedContractorId,
     selectedExportTarget,
-    selectedFloor,
+    sortedDrawings,
   ])
 
   useEffect(() => {
@@ -905,11 +1040,17 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
               showCommonTable={showCommonTable}
               pdfExportSplit={pdfExportSplit}
               selectedTableBadgeVariant={selectedTableBadgeVariant}
-              targetDrawings={targetDrawings}
+              targetDrawings={
+                showDrawingPreview && previewDrawings.length > 0 ? previewDrawings : targetDrawings
+              }
               filteredIssues={filteredIssues}
               getDrawingIssues={getDrawingIssues}
               contractors={contractors}
             />
+
+            {loadingPreviewDrawings && showDrawingPreview && targetDrawings.length > 0 ? (
+              <p className="text-center text-sm text-slate-500">図面URLを読み込み中...</p>
+            ) : null}
 
             {loadingPreviewPhotos && showLists && photoDetailIssuesForPreview.length > 0 ? (
               <p className="text-center text-sm text-slate-500">写真を読み込み中...</p>

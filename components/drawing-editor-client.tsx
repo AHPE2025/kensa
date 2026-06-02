@@ -42,6 +42,7 @@ import {
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
 import { canvasToDataUrl, renderDrawingToCanvas } from '@/lib/drawing-render-export'
+import { getDrawingWithSignedUrl } from '@/lib/drawing-export-url'
 import { createPhotoSignedUrlsForExport, mergePhotoSignedUrls } from '@/lib/issue-photos-client'
 import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { PdfExportPhotoDetailPage } from '@/components/pdf-export-photo-detail'
@@ -516,13 +517,12 @@ export default function DrawingEditorClient() {
   ])
 
   const loadDrawingPdfUrl = useCallback(async (targetDrawingId: string): Promise<string | null> => {
-    const res = await authedFetch(`/api/drawings/${targetDrawingId}/pdf-url`)
-    const data = (await res.json()) as { signedUrl?: string | null; error?: string }
-    if (!res.ok) {
-      console.error('drawing pdf url load error:', data.error ?? targetDrawingId)
-      return null
-    }
-    return data.signedUrl ?? null
+    const drawingWithUrl = await getDrawingWithSignedUrl({
+      id: targetDrawingId,
+      signed_url: null,
+      pdf_signed_url: null,
+    })
+    return drawingWithUrl.signed_url
   }, [])
 
   const handlePdfExport = useCallback(async () => {
@@ -599,18 +599,16 @@ export default function DrawingEditorClient() {
       let drawingImageData: string | null = null
       if (includesDrawingPages(exportContentType) && currentDrawing) {
         const issuesForDrawing = drawingIssues.filter((issue) => issue.drawing_id === currentDrawing.id)
+        const drawingWithSignedUrl = await getDrawingWithSignedUrl(currentDrawing)
+        if (!drawingWithSignedUrl.signed_url) {
+          console.error('Drawings missing signed_url', [drawingWithSignedUrl])
+          throw new Error('図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。')
+        }
         try {
-          const canvas = await renderDrawingToCanvas(
-            {
-              ...currentDrawing,
-              pdf_signed_url: currentDrawing.signed_url ?? null,
-            },
-            issuesForDrawing,
-            {
-              pageIndex: pageIndex ?? 0,
-              resolvePdfUrl: loadDrawingPdfUrl,
-            },
-          )
+          const canvas = await renderDrawingToCanvas(drawingWithSignedUrl, issuesForDrawing, {
+            pageIndex: pageIndex ?? 0,
+            resolvePdfUrl: loadDrawingPdfUrl,
+          })
           drawingImageData = canvasToDataUrl(canvas)
         } catch (error) {
           console.error('Drawing render failed', { drawingId: currentDrawing.id, error })

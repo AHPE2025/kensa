@@ -2,13 +2,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { DRAWING_IMAGES_BUCKET, DRAWING_SIGNED_URL_TTL_SECONDS, DRAWINGS_PDF_BUCKET } from '@/lib/storage'
 
 type DrawingPathSource = {
+  storage_path?: string | null
+  original_file_path?: string | null
   file_path?: string | null
   original_pdf_path?: string | null
   page_images?: string[] | null
 }
 
 export function resolveDrawingPdfStoragePath(drawing: DrawingPathSource): string | null {
-  const path = drawing.original_pdf_path ?? drawing.file_path ?? null
+  const path =
+    drawing.storage_path ||
+    drawing.original_file_path ||
+    drawing.original_pdf_path ||
+    drawing.file_path ||
+    null
   return typeof path === 'string' && path.trim() ? path.trim() : null
 }
 

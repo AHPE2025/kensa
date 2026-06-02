@@ -1,8 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api-auth'
 import { parseRotationForUpdate, parseZoomForUpdate } from '@/lib/drawing-view-settings'
+import {
+  createDrawingPdfSignedUrl,
+  createDrawingPreviewSignedUrl,
+} from '@/lib/drawing-signed-url'
 
 type Params = { params: Promise<{ drawingId: string }> }
+
+export async function GET(request: NextRequest, { params }: Params) {
+  const authed = await getAuthedClient(request)
+  if ('error' in authed) return authed.error
+  const { client, tenantId } = authed
+  const { drawingId } = await params
+
+  const { data: drawing, error } = await client
+    .from('drawings')
+    .select('*')
+    .eq('id', drawingId)
+    .eq('tenant_id', tenantId)
+    .single()
+
+  if (error || !drawing) {
+    console.error('drawing fetch error:', { drawingId, tenantId, error })
+    return NextResponse.json({ error: '図面が見つかりません' }, { status: 404 })
+  }
+
+  const pageImages = Array.isArray(drawing.page_images) ? (drawing.page_images as string[]) : []
+  const storagePath = drawing.file_path ?? drawing.original_pdf_path ?? null
+  const [pdfSignedUrl, imageSignedUrl] = await Promise.all([
+    createDrawingPdfSignedUrl(client, { ...drawing, storage_path: storagePath }),
+    createDrawingPreviewSignedUrl(client, { ...drawing, page_images: pageImages }),
+  ])
+
+  console.log('drawing pdf signedUrl:', pdfSignedUrl ? 'ok' : 'null', {
+    drawingId: drawing.id,
+    storage_path: storagePath,
+    file_path: drawing.file_path,
+    original_pdf_path: drawing.original_pdf_path,
+  })
+
+  return NextResponse.json({
+    ...drawing,
+    storage_path: storagePath,
+    original_pdf_path: drawing.original_pdf_path ?? drawing.file_path ?? null,
+    page_images: pageImages,
+    signed_url: pdfSignedUrl,
+    signedUrl: pdfSignedUrl,
+    pdf_signed_url: pdfSignedUrl,
+    image_signed_url: imageSignedUrl,
+  })
+}
 
 export async function PATCH(request: NextRequest, { params }: Params) {
   const authed = await getAuthedClient(request)

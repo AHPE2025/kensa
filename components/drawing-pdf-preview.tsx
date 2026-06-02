@@ -41,10 +41,19 @@ function resolveBackground(drawing: DrawingPdfPreviewDrawing | null): {
   url: string
 } | null {
   if (!drawing) return null
-  const pdfUrl = drawing.pdf_signed_url ?? null
+
+  const pageImages = Array.isArray(drawing.page_images) ? drawing.page_images : []
+  if (pageImages.length > 0) {
+    const imageUrl = drawing.image_signed_url ?? null
+    if (imageUrl) return { type: 'image', url: imageUrl }
+  }
+
+  const pdfUrl = drawing.pdf_signed_url ?? drawing.signed_url ?? null
   if (pdfUrl) return { type: 'pdf', url: pdfUrl }
-  const imageUrl = drawing.image_signed_url ?? drawing.signed_url ?? null
-  if (imageUrl) return { type: 'image', url: imageUrl }
+
+  const fallbackImageUrl = drawing.image_signed_url ?? null
+  if (fallbackImageUrl) return { type: 'image', url: fallbackImageUrl }
+
   return null
 }
 

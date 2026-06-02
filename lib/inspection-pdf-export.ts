@@ -12,6 +12,7 @@ import {
   renderDrawingToCanvas,
   type DrawingForRender,
 } from '@/lib/drawing-render-export'
+import { normalizeDrawingPdfUrl } from '@/lib/drawing-export-url'
 import type { ExportIssue } from '@/lib/pdf-export-client'
 
 export type InspectionPdfExportOptions = {
@@ -107,17 +108,15 @@ export async function exportInspectionPdf(
   if (includeDrawing) {
     for (const drawing of targetDrawings) {
       const drawingIssues = getDrawingIssues(drawing.id)
+      const drawingWithUrl = normalizeDrawingPdfUrl(drawing)
       console.log('PDF export drawing', {
         drawingId: drawing.id,
         file_path: drawing.file_path,
+        signed_url: drawingWithUrl.signed_url ? 'ok' : null,
         issueCount: drawingIssues.length,
       })
 
       try {
-        const drawingWithUrl: DrawingForRender = {
-          ...drawing,
-          pdf_signed_url: drawing.pdf_signed_url ?? null,
-        }
         const canvas = await renderDrawingToCanvas(drawingWithUrl, drawingIssues, {
           resolvePdfUrl: resolveDrawingPdfUrl,
         })
