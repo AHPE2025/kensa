@@ -53,12 +53,21 @@ export function normalizeDrawingPdfUrl<T extends DrawingUrlFields>(drawing: T): 
 
 export async function fetchDrawingPdfSignedUrl(drawingId: string): Promise<string | null> {
   const res = await authedFetch(`/api/drawings/${drawingId}`)
+  const data = (await res.json().catch(() => ({}))) as DrawingUrlFields & {
+    drawing?: DrawingUrlFields
+    error?: string
+  }
+
+  console.log('fetch drawing detail response', {
+    drawingId,
+    data,
+  })
+
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string }
     console.error('drawing fetch error:', data.error ?? drawingId)
     return null
   }
-  const data = (await res.json()) as DrawingUrlFields & { drawing?: DrawingUrlFields; error?: string }
+
   const payload = data.drawing ?? data
   return pickPdfSignedUrl(payload)
 }
@@ -66,15 +75,50 @@ export async function fetchDrawingPdfSignedUrl(drawingId: string): Promise<strin
 export async function getDrawingWithSignedUrl<T extends DrawingUrlFields>(
   drawing: T,
 ): Promise<T & { signed_url: string | null; pdf_signed_url: string | null }> {
-  const existing = pickPdfSignedUrl(drawing)
-  if (existing) {
-    return normalizeDrawingPdfUrl(drawing)
+  const existingSignedUrl =
+    pickPdfSignedUrl(drawing) ??
+    drawing.signed_url ??
+    drawing.signedUrl ??
+    drawing.url ??
+    drawing.publicUrl ??
+    null
+
+  if (existingSignedUrl) {
+    return normalizeDrawingPdfUrl({
+      ...drawing,
+      signed_url: existingSignedUrl,
+      pdf_signed_url: existingSignedUrl,
+    })
   }
 
-  const fetched = await fetchDrawingPdfSignedUrl(drawing.id)
+  const res = await authedFetch(`/api/drawings/${drawing.id}`)
+  const data = (await res.json().catch(() => ({}))) as DrawingUrlFields & {
+    drawing?: DrawingUrlFields
+    error?: string
+  }
+
+  console.log('fetch drawing detail response', {
+    drawingId: drawing.id,
+    data,
+  })
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch drawing signed url: ${drawing.id}`)
+  }
+
+  const payload = data.drawing ?? data
+  const signedUrl =
+    pickPdfSignedUrl(payload) ??
+    payload.signed_url ??
+    payload.signedUrl ??
+    payload.url ??
+    payload.publicUrl ??
+    null
+
   return normalizeDrawingPdfUrl({
     ...drawing,
-    signed_url: fetched,
-    pdf_signed_url: fetched,
+    ...payload,
+    signed_url: signedUrl,
+    pdf_signed_url: signedUrl,
   })
 }

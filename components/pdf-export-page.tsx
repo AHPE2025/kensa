@@ -47,7 +47,6 @@ import {
   waitForElementImages,
   type ExportIssue,
   type PdfExportCondition,
-  type PdfExportContentType,
   type PdfExportSplit,
 } from '@/lib/pdf-export-client'
 import {
@@ -72,7 +71,7 @@ type DrawingRow = Drawing & {
 }
 
 type ExportTargetMode = 'all' | 'unassigned' | 'contractor'
-type ExportContentMode = PdfExportContentType
+type ExportContentMode = 'list' | 'drawing_and_list'
 type ExportRunOverride = {
   exportTarget: 'contractor' | 'unassigned'
   exportContractorId: string
@@ -106,7 +105,8 @@ function parseExportTargetParam(value: string | null): ExportTargetMode {
 }
 
 function parseExportContentParam(value: string | null): ExportContentMode {
-  return normalizeExportContentType(value)
+  const normalized = normalizeExportContentType(value)
+  return normalized === 'list_only' ? 'list' : 'drawing_and_list'
 }
 
 function resolveInitialContractorId(
@@ -168,7 +168,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   const [selectedExportTarget, setSelectedExportTarget] = useState<ExportTargetMode>('all')
   const [selectedContractorId, setSelectedContractorId] = useState<string>('')
   const [selectedFloor, setSelectedFloor] = useState<'all' | string>('all')
-  const [exportContent, setExportContent] = useState<ExportContentMode>('list_and_drawing')
+  const [exportContent, setExportContent] = useState<ExportContentMode>('drawing_and_list')
   const [exportRunOverride, setExportRunOverride] = useState<ExportRunOverride>(null)
 
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
@@ -419,13 +419,6 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     return 'contractor' as const
   }, [effectiveExportTarget])
 
-  const canExport = useMemo(() => {
-    if (selectedExportTarget === 'contractor') {
-      return Boolean(selectedContractorId) && selectedContractorId !== 'all'
-    }
-    return true
-  }, [selectedContractorId, selectedExportTarget])
-
   const selectedVendorStats = useMemo(
     () => countStatusStats(pdfExportSplit.selectedIssues),
     [pdfExportSplit.selectedIssues],
@@ -435,6 +428,32 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     if (!includesListPages(exportContent)) return []
     return filteredIssues.filter((issue) => issue.before_photo_path || issue.after_photo_path)
   }, [exportContent, filteredIssues])
+
+  useEffect(() => {
+    console.log('issues detail for pdf export', issues.map((issue) => ({
+      id: issue.id,
+      drawing_id: issue.drawing_id,
+      drawingId: (issue as Issue & { drawingId?: string }).drawingId,
+      floor: (issue as Issue & { floor?: string }).floor,
+      floor_label: issue.floor_label,
+      floorLabel: (issue as Issue & { floorLabel?: string }).floorLabel,
+      contractor_id: issue.contractor_id,
+      contractorId: (issue as Issue & { contractorId?: string }).contractorId,
+      assigned_contractor_id: (issue as Issue & { assigned_contractor_id?: string }).assigned_contractor_id,
+      assignedContractorId: (issue as Issue & { assignedContractorId?: string }).assignedContractorId,
+    })))
+    console.log('drawings detail for pdf export', sortedDrawings.map((drawing) => ({
+      id: drawing.id,
+      floor_label: drawing.floor_label,
+      file_path: drawing.file_path,
+      storage_path: (drawing as DrawingRow & { storage_path?: string | null }).storage_path,
+      original_file_path: (drawing as DrawingRow & { original_file_path?: string | null }).original_file_path,
+      signed_url: drawing.signed_url,
+      signedUrl: (drawing as DrawingRow & { signedUrl?: string }).signedUrl,
+      page_images: drawing.page_images,
+      issue_count: drawing.issue_count,
+    })))
+  }, [issues, sortedDrawings])
 
   useEffect(() => {
     console.log('pdf export condition:', {
@@ -664,14 +683,11 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   const handleExportPdf = useCallback(async () => {
     console.log('PDF export clicked')
 
-    if (selectedExportTarget === 'contractor' && !selectedContractorId) {
-      toast.error('出力する業者を選択してください')
-      return
-    }
-
     try {
       setIsExporting(true)
       setExportError(null)
+
+      const normalizedContent = normalizeExportContentType(exportContent)
 
       console.log('PDF export condition', {
         exportTarget: effectiveExportTarget,
@@ -679,44 +695,72 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         exportContentType: exportContent,
       })
 
-      if (filteredIssues.length === 0) {
-        setExportError('選択条件に該当する指摘がありません。業者または出力対象を変更してください。')
-        return
-      }
-
-      const exportTargetDrawingIds = new Set(
-        filteredIssues.map((issue) => issue.drawing_id ?? (issue as ExportIssue & { drawingId?: string }).drawingId).filter(Boolean),
-      )
-      const drawingsForExport = sortedDrawings.filter((drawing) => exportTargetDrawingIds.has(drawing.id))
-
-      if (includesDrawingPages(exportContent) && drawingsForExport.length === 0) {
-        setExportError('出力対象の図面がありません。指摘と図面の紐付けを確認してください。')
+      if (selectedExportTarget === 'contractor' && (!selectedContractorId || selectedContractorId === 'all')) {
+        setExportError('出力する業者を選択してください')
         return
       }
 
       console.log('PDF export filtered issues', filteredIssues)
+
+      if (filteredIssues.length === 0) {
+        setExportError('選択条件に該当する指摘がありません。出力対象または業者を変更してください。')
+        return
+      }
+
+      const exportTargetDrawingIds = new Set(
+        filteredIssues
+          .map((issue) => issue.drawing_id ?? (issue as ExportIssue & { drawingId?: string }).drawingId)
+          .filter(Boolean),
+      )
+      const drawingsForExport = sortedDrawings.filter((drawing) => exportTargetDrawingIds.has(drawing.id))
+
       console.log('PDF export target drawings before signed url', drawingsForExport)
 
-      const drawingsWithSignedUrl = await resolveDrawingsWithSignedUrl(drawingsForExport)
-      console.log('PDF export drawings with signed url', drawingsWithSignedUrl)
-
-      const invalidDrawings = drawingsWithSignedUrl.filter((drawing) => !drawing.signed_url)
-      if (includesDrawingPages(exportContent) && invalidDrawings.length > 0) {
-        console.error('Drawings missing signed_url', invalidDrawings)
-        setExportError('図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。')
+      if (normalizedContent === 'list_only') {
+        console.log('PDF export mode: list only')
+        targetDrawingsRef.current = []
+        const exported = await runPdfExport([])
+        if (!exported) {
+          setExportError('選択条件に該当する指摘がありません。出力対象または業者を変更してください。')
+          return
+        }
+        console.log('PDF export completed')
+        toast.success(`${pdfExportSplit.exportContractorLabel}のPDFを出力しました`)
         return
       }
 
-      targetDrawingsRef.current = drawingsWithSignedUrl
+      if (normalizedContent === 'list_and_drawing') {
+        console.log('PDF export mode: drawing and list')
 
-      const exported = await runPdfExport(drawingsWithSignedUrl)
-      if (!exported) {
-        setExportError('選択条件に該当する指摘がありません。業者または出力対象を変更してください。')
+        if (drawingsForExport.length === 0) {
+          setExportError('出力対象の図面がありません。指摘と図面の紐付けを確認してください。')
+          return
+        }
+
+        const drawingsWithSignedUrl = await resolveDrawingsWithSignedUrl(drawingsForExport)
+        console.log('PDF export drawings with signed url', drawingsWithSignedUrl)
+
+        const invalidDrawings = drawingsWithSignedUrl.filter((drawing) => !drawing.signed_url)
+        if (invalidDrawings.length > 0) {
+          console.error('Drawings missing signed_url', invalidDrawings)
+          setExportError('図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。')
+          return
+        }
+
+        targetDrawingsRef.current = drawingsWithSignedUrl
+
+        const exported = await runPdfExport(drawingsWithSignedUrl)
+        if (!exported) {
+          setExportError('選択条件に該当する指摘がありません。出力対象または業者を変更してください。')
+          return
+        }
+
+        console.log('PDF export completed')
+        toast.success(`${pdfExportSplit.exportContractorLabel}のPDFを出力しました`)
         return
       }
 
-      console.log('PDF export completed')
-      toast.success(`${pdfExportSplit.exportContractorLabel}のPDFを出力しました`)
+      setExportError('不明な出力形式です。出力内容を選び直してください。')
     } catch (error) {
       console.error('PDF export failed', error)
       const message =
@@ -832,6 +876,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             {exportError ? <p className="text-sm text-red-600">{exportError}</p> : null}
             <div className="flex flex-wrap items-center gap-2">
               <Button
+                type="button"
                 variant="outline"
                 className="h-10 gap-2 bg-white px-3 md:h-11 md:px-4"
                 disabled={isExporting || contractors.length === 0}
@@ -842,9 +887,10 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                 <span className="sm:hidden">一括出力</span>
               </Button>
               <Button
+                type="button"
                 className="h-10 gap-2 bg-blue-600 px-3 hover:bg-blue-700 md:h-11 md:px-4"
-                disabled={isExporting || !canExport}
-                onClick={() => void handleExportPdf()}
+                disabled={isExporting}
+                onClick={handleExportPdf}
               >
                 <Download className="h-4 w-4" />
                 {isExporting ? 'PDF生成中...' : 'PDF出力'}
@@ -942,13 +988,11 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                   <div className="space-y-2">
                     <Label className="text-sm font-medium">出力内容</Label>
                     <RadioGroup
-                      value={exportContent === 'list_only' ? 'list_only' : 'drawing_and_list'}
-                      onValueChange={(value) =>
-                        setExportContent(normalizeExportContentType(value) as ExportContentMode)
-                      }
+                      value={exportContent}
+                      onValueChange={(value) => setExportContent(value as ExportContentMode)}
                     >
                       <div className="flex items-center gap-2">
-                        <RadioGroupItem value="list_only" id="pdf-list-only" />
+                        <RadioGroupItem value="list" id="pdf-list-only" />
                         <Label htmlFor="pdf-list-only" className="text-sm">
                           指摘一覧のみ
                         </Label>
@@ -962,13 +1006,15 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                     </RadioGroup>
                   </div>
 
-                  {exportError ? <p className="text-sm text-red-600">{exportError}</p> : null}
+                  {exportError ? (
+                    <p className="text-red-600 text-sm mt-2">{exportError}</p>
+                  ) : null}
 
                   <Button
                     type="button"
                     className="h-11 w-full bg-blue-600 hover:bg-blue-700"
-                    disabled={isExporting || !canExport}
-                    onClick={() => void handleExportPdf()}
+                    disabled={isExporting}
+                    onClick={handleExportPdf}
                   >
                     <Download className="mr-2 h-4 w-4" />
                     {isExporting ? 'PDF生成中...' : 'PDF出力'}

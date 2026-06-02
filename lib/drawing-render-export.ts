@@ -33,11 +33,12 @@ export function resolveDrawingBackground(drawing: DrawingForRender | null): {
     if (imageUrl) return { type: 'image', url: imageUrl }
   }
 
-  const pdfUrl =
-    drawing.pdf_signed_url ??
-    drawing.signed_url ??
-    null
+  const pdfUrl = drawing.pdf_signed_url ?? drawing.signed_url ?? null
   if (pdfUrl) return { type: 'pdf', url: pdfUrl }
+
+  if (pageImages.length > 0) {
+    return null
+  }
 
   const fallbackImageUrl = drawing.image_signed_url ?? null
   if (fallbackImageUrl) return { type: 'image', url: fallbackImageUrl }

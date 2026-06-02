@@ -37,12 +37,14 @@ import {
   downloadPdfBlob,
   includesDrawingPages,
   includesListPages,
+  normalizeExportContentType,
   splitIssuesForPdfExport,
   waitForElementImages,
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
 import { canvasToDataUrl, renderDrawingToCanvas } from '@/lib/drawing-render-export'
 import { getDrawingWithSignedUrl } from '@/lib/drawing-export-url'
+import { getTargetDrawings } from '@/lib/pdf-export-filters'
 import { createPhotoSignedUrlsForExport, mergePhotoSignedUrls } from '@/lib/issue-photos-client'
 import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { PdfExportPhotoDetailPage } from '@/components/pdf-export-photo-detail'
@@ -151,9 +153,7 @@ export default function DrawingEditorClient() {
   })
   const [exportTarget, setExportTarget] = useState<'all' | 'unassigned' | 'contractor'>('all')
   const [exportContractorId, setExportContractorId] = useState<string>('all')
-  const [exportContentType, setExportContentType] = useState<
-    'list_only' | 'list_and_drawing' | 'drawing_only'
-  >('list_and_drawing')
+  const [exportContentType, setExportContentType] = useState<'list' | 'drawing_and_list'>('drawing_and_list')
   const [isExporting, setIsExporting] = useState(false)
   const [project, setProject] = useState<Project | null>(null)
   const [profileTenantId, setProfileTenantId] = useState<string | null>(null)
@@ -422,6 +422,52 @@ export default function DrawingEditorClient() {
 
   const floors = useMemo(() => sortedDrawings.map((drawing) => drawing.floor_label), [sortedDrawings])
 
+  useEffect(() => {
+    console.log('issues detail for pdf export', issues.map((issue) => ({
+      id: issue.id,
+      drawing_id: issue.drawing_id,
+      drawingId: (issue as Issue & { drawingId?: string }).drawingId,
+      floor: (issue as Issue & { floor?: string }).floor,
+      floor_label: issue.floor_label,
+      floorLabel: (issue as Issue & { floorLabel?: string }).floorLabel,
+      contractor_id: issue.contractor_id,
+      contractorId: (issue as Issue & { contractorId?: string }).contractorId,
+      assigned_contractor_id: (issue as Issue & { assigned_contractor_id?: string }).assigned_contractor_id,
+      assignedContractorId: (issue as Issue & { assignedContractorId?: string }).assignedContractorId,
+    })))
+    console.log('drawings detail for pdf export', sortedDrawings.map((drawing) => ({
+      id: drawing.id,
+      floor_label: drawing.floor_label,
+      file_path: drawing.file_path,
+      storage_path: (drawing as DrawingRow & { storage_path?: string | null }).storage_path,
+      original_file_path: (drawing as DrawingRow & { original_file_path?: string | null }).original_file_path,
+      signed_url: drawing.signed_url,
+      signedUrl: (drawing as DrawingRow & { signedUrl?: string }).signedUrl,
+      page_images: drawing.page_images,
+      issue_count: drawing.issue_count,
+    })))
+    console.log('sorted drawings:', sortedDrawings)
+    console.log('current drawing index:', currentDrawingIndex)
+    console.log('current drawing id:', drawingId)
+    console.log('next drawing:', nextDrawing)
+    console.log('prev drawing:', prevDrawing)
+    console.log('pdf export condition:', {
+      exportTarget,
+      exportContractorId,
+      exportContentType,
+    })
+  }, [
+    issues,
+    sortedDrawings,
+    currentDrawingIndex,
+    drawingId,
+    nextDrawing,
+    prevDrawing,
+    exportTarget,
+    exportContractorId,
+    exportContentType,
+  ])
+
   const exportCondition = useMemo<PdfExportCondition>(
     () => ({
       exportTarget,
@@ -455,67 +501,6 @@ export default function DrawingEditorClient() {
     return 'contractor' as const
   }, [exportTarget])
 
-  const handleOpenPdfExportPage = useCallback(() => {
-    console.log('PDF出力ボタンがクリックされました')
-    console.log('pdf export condition:', {
-      exportTarget,
-      exportContractorId,
-      exportContentType,
-    })
-
-    const resolvedProjectId =
-      routeProjectId ??
-      (projectId || project?.id || currentDrawing?.project_id || undefined)
-    const resolvedDrawingId =
-      currentDrawing?.id ||
-      drawingId ||
-      routeDrawingId ||
-      (currentDrawingIndex >= 0 ? drawings[currentDrawingIndex]?.id : undefined) ||
-      (currentDrawingIndex >= 0 ? sortedDrawings[currentDrawingIndex]?.id : undefined)
-
-    console.log('PDF export navigation:', {
-      resolvedProjectId,
-      resolvedDrawingId,
-    })
-
-    if (!resolvedProjectId) {
-      console.error('projectId is missing')
-      alert('案件情報が取得できていないため、PDF出力ページへ移動できません。')
-      return
-    }
-
-    if (!resolvedDrawingId) {
-      console.error('drawingId is missing')
-      alert('図面情報が取得できていないため、PDF出力ページへ移動できません。')
-      return
-    }
-
-    const params = new URLSearchParams()
-    params.set('drawingId', resolvedDrawingId)
-    params.set('target', exportTarget)
-    params.set('contractorId', exportContractorId)
-    params.set('contentType', exportContentType)
-
-    const exportUrl = `/projects/${resolvedProjectId}/export?${params.toString()}`
-    console.log('router.push url:', exportUrl)
-    router.push(exportUrl)
-  }, [
-    currentDrawing?.id,
-    currentDrawing?.project_id,
-    currentDrawingIndex,
-    drawingId,
-    drawings,
-    exportContentType,
-    exportContractorId,
-    exportTarget,
-    project?.id,
-    projectId,
-    routeDrawingId,
-    routeProjectId,
-    router,
-    sortedDrawings,
-  ])
-
   const loadDrawingPdfUrl = useCallback(async (targetDrawingId: string): Promise<string | null> => {
     const drawingWithUrl = await getDrawingWithSignedUrl({
       id: targetDrawingId,
@@ -525,62 +510,58 @@ export default function DrawingEditorClient() {
     return drawingWithUrl.signed_url
   }, [])
 
-  const handlePdfExport = useCallback(async () => {
+  const handleExportPdf = useCallback(async () => {
     console.log('PDF export clicked')
 
     try {
       setIsExporting(true)
       setExportError(null)
 
-      if (exportTarget === 'contractor' && exportContractorId === 'all') {
-        throw new Error('出力する業者を選択してください')
+      const normalizedContent = normalizeExportContentType(exportContentType)
+
+      console.log('PDF export condition', {
+        exportTarget,
+        exportContractorId,
+        exportContentType,
+      })
+
+      if (exportTarget === 'contractor' && (exportContractorId === 'all' || !exportContractorId)) {
+        setExportError('出力する業者を選択してください')
+        return
       }
 
       const {
         commonIssues,
         drawingIssues,
         photoDetailIssues,
-        selectedContractor,
         exportContractorLabel,
       } = pdfExportSplit
 
-      console.log('PDF export condition', {
-        exportContentType,
-        exportTarget,
-        exportContractorId,
-      })
-      console.log('filteredIssues', [...pdfExportSplit.selectedIssues, ...commonIssues])
-      console.log('targetDrawings', currentDrawing ? [currentDrawing] : [])
-      console.log('pdf selected contractor:', selectedContractor)
-      console.log('pdf drawing issues:', drawingIssues)
+      const filteredIssues = [...pdfExportSplit.selectedIssues, ...commonIssues]
 
-      const selectedTableTarget = selectedTableExportRef.current
-      if (includesListPages(exportContentType) && !selectedTableTarget) {
-        throw new Error('指摘一覧表の出力対象が見つかりません')
+      console.log('PDF export filtered issues', filteredIssues)
+
+      if (!filteredIssues || filteredIssues.length === 0) {
+        setExportError('選択条件に該当する指摘がありません。出力対象または業者を変更してください。')
+        return
       }
 
-      if (includesDrawingPages(exportContentType) && !currentDrawing) {
-        throw new Error('図面データがありません')
-      }
+      const targetDrawingsForExport = getTargetDrawings(sortedDrawings, filteredIssues, 'all')
 
-      console.log('pdf export start')
-
-      const targetIssues = pdfExportSplit.selectedIssues
-      const pendingCount = targetIssues.filter(
-        (issue) => normalizeIssueStatus(issue.status) === '未対応',
-      ).length
-      const completedCount = targetIssues.filter(
-        (issue) => normalizeIssueStatus(issue.status) === '完了',
-      ).length
-      console.log('pdf issue status counts:', {
-        total: targetIssues.length,
-        pending: pendingCount,
-        completed: completedCount,
-      })
+      console.log('PDF export target drawings before signed url', targetDrawingsForExport)
 
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       })
+
+      const selectedTableTarget = selectedTableExportRef.current
+      if (
+        includesListPages(exportContentType) &&
+        pdfExportSplit.selectedIssues.length > 0 &&
+        !selectedTableTarget
+      ) {
+        throw new Error('指摘一覧表の出力対象が見つかりません')
+      }
 
       const selectedTableImage =
         includesListPages(exportContentType) && selectedTableTarget && pdfExportSplit.selectedIssues.length > 0
@@ -596,30 +577,52 @@ export default function DrawingEditorClient() {
         commonTableImage = await captureElement(commonTableTarget)
       }
 
-      let drawingImageData: string | null = null
-      if (includesDrawingPages(exportContentType) && currentDrawing) {
-        const issuesForDrawing = drawingIssues.filter((issue) => issue.drawing_id === currentDrawing.id)
-        const drawingWithSignedUrl = await getDrawingWithSignedUrl(currentDrawing)
-        if (!drawingWithSignedUrl.signed_url) {
-          console.error('Drawings missing signed_url', [drawingWithSignedUrl])
-          throw new Error('図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。')
+      let drawingImageDataList: string[] = []
+
+      if (normalizedContent === 'list_only') {
+        console.log('PDF export mode: list only')
+      } else if (normalizedContent === 'list_and_drawing') {
+        console.log('PDF export mode: drawing and list')
+
+        if (!targetDrawingsForExport || targetDrawingsForExport.length === 0) {
+          setExportError('出力対象の図面がありません。指摘と図面の紐付けを確認してください。')
+          return
         }
-        try {
-          const canvas = await renderDrawingToCanvas(drawingWithSignedUrl, issuesForDrawing, {
-            pageIndex: pageIndex ?? 0,
-            resolvePdfUrl: loadDrawingPdfUrl,
-          })
-          drawingImageData = canvasToDataUrl(canvas)
-        } catch (error) {
-          console.error('Drawing render failed', { drawingId: currentDrawing.id, error })
-          throw error
+
+        const drawingsWithSignedUrl = await Promise.all(
+          targetDrawingsForExport.map((drawing) => getDrawingWithSignedUrl(drawing)),
+        )
+
+        console.log('PDF export drawings with signed url', drawingsWithSignedUrl)
+
+        const invalidDrawings = drawingsWithSignedUrl.filter((drawing) => !drawing.signed_url)
+        if (invalidDrawings.length > 0) {
+          console.error('Drawings missing signed_url', invalidDrawings)
+          setExportError('図面URLを取得できませんでした。再度読み込み直してからPDF出力してください。')
+          return
         }
+
+        for (const drawingWithSignedUrl of drawingsWithSignedUrl) {
+          const issuesForDrawing = drawingIssues.filter((issue) => issue.drawing_id === drawingWithSignedUrl.id)
+          try {
+            const canvas = await renderDrawingToCanvas(drawingWithSignedUrl, issuesForDrawing, {
+              pageIndex: pageIndex ?? 0,
+              resolvePdfUrl: loadDrawingPdfUrl,
+            })
+            drawingImageDataList.push(canvasToDataUrl(canvas))
+          } catch (error) {
+            console.error('Drawing render failed', { drawingId: drawingWithSignedUrl.id, error })
+            throw error
+          }
+        }
+      } else {
+        setExportError('不明な出力形式です。出力内容を選び直してください。')
+        return
       }
 
       let photoDetailImages: string[] = []
-      if (photoDetailIssues.length > 0) {
+      if (includesListPages(exportContentType) && photoDetailIssues.length > 0) {
         const photoSignedUrls = await createPhotoSignedUrlsForExport(photoDetailIssues)
-        console.log('photo signed urls:', photoSignedUrls)
         const mergedPhotoIssues = mergePhotoSignedUrls(photoDetailIssues, photoSignedUrls)
         setPhotoExportIssues(mergedPhotoIssues)
         await new Promise<void>((resolve) => {
@@ -639,13 +642,18 @@ export default function DrawingEditorClient() {
       const hasExportableList =
         pdfExportSplit.selectedIssues.length > 0 || commonIssues.length > 0
 
+      if (normalizedContent === 'list_only' && !hasExportableList && photoDetailImages.length === 0) {
+        setExportError('選択条件に該当する指摘がありません。出力対象または業者を変更してください。')
+        return
+      }
+
       const { blob, filename } = await buildInspectionReportPdf({
         selectedTableImage,
         commonTableImage,
-        drawingImageData,
+        drawingImageDataList,
         photoDetailImages,
         includeLists: includesListPages(exportContentType) && hasExportableList,
-        includeDrawing: includesDrawingPages(exportContentType),
+        includeDrawing: includesDrawingPages(exportContentType) && drawingImageDataList.length > 0,
         includePhotoDetail: photoDetailImages.length > 0,
         hasCommonPage: commonIssues.length > 0,
         filenameLabel: exportContractorLabel,
@@ -663,16 +671,13 @@ export default function DrawingEditorClient() {
       setIsExporting(false)
     }
   }, [
-    currentDrawing,
-    exportCondition,
     exportContentType,
     exportContractorId,
     exportTarget,
     loadDrawingPdfUrl,
     pageIndex,
     pdfExportSplit,
-    project?.address,
-    project?.name,
+    sortedDrawings,
   ])
 
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
@@ -1262,23 +1267,21 @@ export default function DrawingEditorClient() {
                           }
                         >
                           <TabsList className="grid w-full grid-cols-2">
-                            <TabsTrigger value="list_only">指摘一覧のみ</TabsTrigger>
-                            <TabsTrigger value="list_and_drawing">一覧＋図面</TabsTrigger>
+                            <TabsTrigger value="list">指摘一覧のみ</TabsTrigger>
+                            <TabsTrigger value="drawing_and_list">図面＋指摘一覧</TabsTrigger>
                           </TabsList>
                         </Tabs>
                       </div>
                       {exportError ? (
-                        <p className="text-xs text-red-600">{exportError}</p>
+                        <p className="text-red-600 text-sm mt-2">{exportError}</p>
                       ) : null}
                       <Button
                         type="button"
                         className="w-full bg-blue-600 hover:bg-blue-700"
-                        onClick={(event) => {
-                          event.preventDefault()
-                          handleOpenPdfExportPage()
-                        }}
+                        disabled={isExporting}
+                        onClick={handleExportPdf}
                       >
-                        PDF出力
+                        {isExporting ? 'PDF生成中...' : 'PDF出力'}
                       </Button>
                     </CardContent>
                   </Card>
@@ -1401,13 +1404,11 @@ export default function DrawingEditorClient() {
             <Button
               type="button"
               className="h-12 bg-blue-600 hover:bg-blue-700"
-              onClick={(event) => {
-                event.preventDefault()
-                handleOpenPdfExportPage()
-              }}
+              disabled={isExporting}
+              onClick={handleExportPdf}
             >
               <Download className="mr-2 h-5 w-5" />
-              PDF出力
+              {isExporting ? 'PDF生成中...' : 'PDF出力'}
             </Button>
             <Button
               variant="destructive"

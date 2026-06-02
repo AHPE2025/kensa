@@ -25,12 +25,18 @@ export function normalizeExportContentType(
   return 'list_and_drawing'
 }
 
-export function includesListPages(contentType: PdfExportContentType): boolean {
-  return contentType === 'list_and_drawing' || contentType === 'list_only'
+export function includesListPages(
+  contentType: PdfExportContentType | LegacyPdfExportContentType | string,
+): boolean {
+  const normalized = normalizeExportContentType(contentType)
+  return normalized === 'list_and_drawing' || normalized === 'list_only'
 }
 
-export function includesDrawingPages(contentType: PdfExportContentType): boolean {
-  return contentType === 'list_and_drawing' || contentType === 'drawing_only'
+export function includesDrawingPages(
+  contentType: PdfExportContentType | LegacyPdfExportContentType | string,
+): boolean {
+  const normalized = normalizeExportContentType(contentType)
+  return normalized === 'list_and_drawing' || normalized === 'drawing_only'
 }
 
 export type PdfExportMeta = {
