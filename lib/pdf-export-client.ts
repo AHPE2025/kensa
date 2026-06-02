@@ -1,6 +1,7 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { Contractor, Issue } from '@/lib/domain'
+import { toAsciiFileName } from '@/lib/filename'
 
 export type PdfExportContentType = 'list_and_drawing' | 'drawing_only' | 'list_only'
 
@@ -69,6 +70,50 @@ function formatExportTimestamp(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
 }
+
+export type BulkExportTarget = {
+  exportTarget: 'contractor' | 'unassigned'
+  exportContractorId: string
+  label: string
+}
+
+export function listBulkExportTargets(
+  contractors: Contractor[],
+  issues: Issue[],
+): BulkExportTarget[] {
+  const targets: BulkExportTarget[] = contractors.map((contractor) => ({
+    exportTarget: 'contractor',
+    exportContractorId: contractor.id,
+    label: contractor.name,
+  }))
+  if (issues.some(isUnassignedIssue)) {
+    targets.push({
+      exportTarget: 'unassigned',
+      exportContractorId: 'all',
+      label: '業者未定',
+    })
+  }
+  return targets
+}
+
+export function buildInspectionReportFilename(label?: string): string {
+  const safeLabel = label ? toAsciiFileName(label) : 'report'
+  return `inspection_report_${safeLabel}_${formatExportTimestamp(new Date())}.pdf`
+}
+
+export async function waitForDomUpdate(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
+const DOWNLOAD_INTERVAL_MS = 400
+
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export { DOWNLOAD_INTERVAL_MS }
 
 export function isCommonIssue(issue: Issue): boolean {
   return issue.issue_category === 'common'
@@ -284,6 +329,7 @@ export async function buildInspectionReportPdf(options: {
   includeDrawing: boolean
   includePhotoDetail: boolean
   hasCommonPage: boolean
+  filenameLabel?: string
 }): Promise<{ blob: Blob; filename: string }> {
   const pdf = new jsPDF({
     orientation: 'portrait',
@@ -322,7 +368,7 @@ export async function buildInspectionReportPdf(options: {
     }
   }
 
-  const filename = `inspection_report_${formatExportTimestamp(new Date())}.pdf`
+  const filename = buildInspectionReportFilename(options.filenameLabel)
   return { blob: pdf.output('blob'), filename }
 }
 

@@ -403,11 +403,8 @@ export default function ProjectDetailPage() {
           <div className="flex justify-end">
             <Button
               variant="outline"
-              onClick={() => {
-                setSelectedContractorIds([])
-                setExportFloors([])
-                toast.success('全業者一括出力を開始しました')
-              }}
+              disabled={contractors.length === 0}
+              onClick={() => router.push(`/projects/${projectId}/export?bulk=1`)}
             >
               <Download className="mr-2 h-4 w-4" />
               全業者一括出力

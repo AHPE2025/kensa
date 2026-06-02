@@ -37,14 +37,19 @@ import {
 import {
   buildInspectionReportPdf,
   captureElement,
+  delay,
   downloadPdfBlob,
+  DOWNLOAD_INTERVAL_MS,
   includesDrawingPages,
   includesListPages,
+  listBulkExportTargets,
   normalizeExportContentType,
+  waitForDomUpdate,
   waitForElementImages,
   waitForExportReady,
   type PdfExportCondition,
   type PdfExportContentType,
+  type PdfExportSplit,
 } from '@/lib/pdf-export-client'
 import { InspectionListPreview } from '@/components/inspection-list-preview'
 import { PdfExportPhotoDetailPage, type PhotoDetailIssue } from '@/components/pdf-export-photo-detail'
@@ -63,6 +68,10 @@ type DrawingRow = Drawing & {
 
 type ExportTargetMode = 'all' | 'unassigned' | 'contractor'
 type ExportContentMode = PdfExportContentType
+type ExportRunOverride = {
+  exportTarget: 'contractor' | 'unassigned'
+  exportContractorId: string
+} | null
 
 const ALL_FLOORS_VALUE = '__all__'
 
@@ -153,11 +162,15 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   const [selectedContractorId, setSelectedContractorId] = useState<string>('')
   const [selectedFloor, setSelectedFloor] = useState<'all' | string>('all')
   const [exportContent, setExportContent] = useState<ExportContentMode>('list_and_drawing')
+  const [exportRunOverride, setExportRunOverride] = useState<ExportRunOverride>(null)
 
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
   const drawingExportRefs = useRef<(HTMLDivElement | null)[]>([])
   const photoDetailExportRefs = useRef<(HTMLDivElement | null)[]>([])
+  const pdfExportSplitRef = useRef<PdfExportSplit | null>(null)
+  const targetDrawingsRef = useRef<DrawingRow[]>([])
+  const bulkExportStartedRef = useRef(false)
 
   useEffect(() => {
     if (!loadingAuth && !user) router.replace('/login')
@@ -298,14 +311,17 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     [exportDateLabel, project?.inspection_date],
   )
 
+  const effectiveExportTarget = exportRunOverride?.exportTarget ?? selectedExportTarget
+  const effectiveContractorId = exportRunOverride?.exportContractorId ?? selectedContractorId
+
   const exportCondition = useMemo<PdfExportCondition>(
     () => ({
-      exportTarget: selectedExportTarget,
+      exportTarget: effectiveExportTarget,
       exportContractorId:
-        selectedExportTarget === 'contractor' ? selectedContractorId || 'all' : 'all',
+        effectiveExportTarget === 'contractor' ? effectiveContractorId || 'all' : 'all',
       exportContentType: exportContent,
     }),
-    [exportContent, selectedContractorId, selectedExportTarget],
+    [exportContent, effectiveContractorId, effectiveExportTarget],
   )
 
   const numberedIssues = useMemo(() => {
@@ -328,6 +344,14 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     [sortedDrawings, filteredIssues, selectedFloor],
   )
 
+  useEffect(() => {
+    pdfExportSplitRef.current = pdfExportSplit
+  }, [pdfExportSplit])
+
+  useEffect(() => {
+    targetDrawingsRef.current = targetDrawings
+  }, [targetDrawings])
+
   const getDrawingIssues = useCallback(
     (drawingId: string) => getIssuesByDrawingId(filteredIssues, drawingId),
     [filteredIssues],
@@ -337,10 +361,10 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     selectedFloor === 'all' ? '全階' : sortedDrawings.find((d) => d.floor_label === selectedFloor)?.floor_label ?? selectedFloor
 
   const selectedTableBadgeVariant = useMemo(() => {
-    if (selectedExportTarget === 'unassigned') return 'unassigned' as const
-    if (selectedExportTarget === 'all') return 'all' as const
+    if (effectiveExportTarget === 'unassigned') return 'unassigned' as const
+    if (effectiveExportTarget === 'all') return 'all' as const
     return 'contractor' as const
-  }, [selectedExportTarget])
+  }, [effectiveExportTarget])
 
   const canExport = useMemo(() => {
     if (selectedExportTarget === 'contractor') {
@@ -413,9 +437,189 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     setSelectedFloor(value === ALL_FLOORS_VALUE ? 'all' : value)
   }
 
-  const handleBulkExport = useCallback(() => {
-    toast.info('全業者一括出力は次の工程で実装します')
-  }, [])
+  const runPdfExport = useCallback(
+    async (options?: { filenameLabel?: string; skipEmpty?: boolean }): Promise<boolean> => {
+      const split = pdfExportSplitRef.current
+      const drawingsForExport = targetDrawingsRef.current
+      if (!split) return false
+
+      const { commonIssues: commonForExport, photoDetailIssues, selectedIssues, exportContractorLabel } =
+        split
+      const includeLists = includesListPages(exportContent)
+      const includeDrawing = includesDrawingPages(exportContent)
+      const includePhotoDetail = includeLists && photoDetailIssues.length > 0
+      const filenameLabel = options?.filenameLabel ?? exportContractorLabel
+
+      if (
+        options?.skipEmpty &&
+        includeLists &&
+        selectedIssues.length === 0 &&
+        commonForExport.length === 0
+      ) {
+        return false
+      }
+      if (options?.skipEmpty && includeDrawing && drawingsForExport.length === 0 && !includeLists) {
+        return false
+      }
+
+      if (includeLists && selectedIssues.length === 0 && commonForExport.length === 0 && !includeDrawing) {
+        throw new Error('出力対象の指摘がありません')
+      }
+      if (includeDrawing && drawingsForExport.length === 0 && !includeLists) {
+        throw new Error('出力対象の図面がありません')
+      }
+
+      const selectedTableTarget = selectedTableExportRef.current
+      if (includeLists && selectedIssues.length + commonForExport.length > 0 && !selectedTableTarget) {
+        throw new Error('指摘一覧表の出力対象が見つかりません')
+      }
+
+      let photoDetailIssuesWithUrls: PhotoDetailIssue[] = []
+      if (includePhotoDetail && photoDetailIssues.length > 0) {
+        const signedUrls = await createPhotoSignedUrlsForExport(photoDetailIssues)
+        photoDetailIssuesWithUrls = mergePhotoSignedUrls(photoDetailIssues, signedUrls)
+        setPhotoDetailExportData(photoDetailIssuesWithUrls)
+      } else {
+        setPhotoDetailExportData([])
+      }
+
+      await waitForDomUpdate()
+
+      const selectedTableImage =
+        includeLists && selectedTableTarget && selectedIssues.length > 0
+          ? await captureElement(selectedTableTarget)
+          : null
+
+      let commonTableImage: string | null = null
+      if (includeLists && commonForExport.length > 0) {
+        const commonTableTarget = commonTableExportRef.current
+        if (!commonTableTarget) {
+          throw new Error('共通指摘一覧表の出力対象が見つかりません')
+        }
+        commonTableImage = await captureElement(commonTableTarget)
+      }
+
+      const drawingImageDataList: string[] = []
+      if (includeDrawing) {
+        for (let index = 0; index < drawingsForExport.length; index += 1) {
+          const drawing = drawingsForExport[index]
+          const drawingTarget = drawingExportRefs.current[index]
+          if (!drawingTarget) {
+            throw new Error(`図面の出力対象が見つかりません（${drawing.floor_label}）`)
+          }
+          await waitForExportReady(drawingTarget)
+          await waitForElementImages(drawingTarget)
+          await waitForDomUpdate()
+          drawingImageDataList.push(await captureElement(drawingTarget))
+        }
+      }
+
+      const photoDetailImages: string[] = []
+      if (includePhotoDetail) {
+        await waitForDomUpdate()
+        for (let index = 0; index < photoDetailIssuesWithUrls.length; index += 1) {
+          const target = photoDetailExportRefs.current[index]
+          if (!target) continue
+          await waitForElementImages(target)
+          photoDetailImages.push(await captureElement(target))
+        }
+      }
+
+      const hasExportableList = selectedIssues.length > 0 || commonForExport.length > 0
+      const hasExportableContent = hasExportableList || drawingImageDataList.length > 0
+      if (options?.skipEmpty && !hasExportableContent) {
+        return false
+      }
+
+      const { blob, filename } = await buildInspectionReportPdf({
+        selectedTableImage,
+        commonTableImage,
+        drawingImageDataList,
+        photoDetailImages,
+        includeLists: includeLists && hasExportableList,
+        includeDrawing,
+        includePhotoDetail,
+        hasCommonPage: includeLists && commonForExport.length > 0,
+        filenameLabel,
+      })
+
+      downloadPdfBlob(blob, filename)
+      return true
+    },
+    [exportContent],
+  )
+
+  const handleBulkExport = useCallback(async () => {
+    if (contractors.length === 0) {
+      toast.error('業者が登録されていません')
+      return
+    }
+
+    const targets = listBulkExportTargets(contractors, issues)
+    if (targets.length === 0) {
+      toast.error('出力対象の業者がありません')
+      return
+    }
+
+    try {
+      setIsExporting(true)
+      setExportError(null)
+
+      let successCount = 0
+      let skippedCount = 0
+      const toastId = toast.loading(`PDF出力中... (0/${targets.length})`)
+
+      for (let index = 0; index < targets.length; index += 1) {
+        const target = targets[index]
+        toast.loading(`PDF出力中... (${index + 1}/${targets.length}) ${target.label}`, { id: toastId })
+
+        drawingExportRefs.current = []
+        photoDetailExportRefs.current = []
+        setExportRunOverride({
+          exportTarget: target.exportTarget,
+          exportContractorId: target.exportContractorId,
+        })
+        await waitForDomUpdate()
+        await delay(100)
+
+        try {
+          const exported = await runPdfExport({ filenameLabel: target.label, skipEmpty: true })
+          if (exported) {
+            successCount += 1
+          } else {
+            skippedCount += 1
+          }
+        } catch (error) {
+          console.error(`PDF export failed for ${target.label}:`, error)
+          toast.error(`${target.label}のPDF出力に失敗しました`)
+        }
+
+        if (index < targets.length - 1) {
+          await delay(DOWNLOAD_INTERVAL_MS)
+        }
+      }
+
+      setExportRunOverride(null)
+      setPhotoDetailExportData([])
+
+      if (successCount === 0) {
+        toast.error('出力対象の指摘がありません', { id: toastId })
+        return
+      }
+
+      const skippedMessage =
+        skippedCount > 0 ? `（${skippedCount}件は指摘なしのためスキップ）` : ''
+      toast.success(`${successCount}件の業者別PDFを出力しました${skippedMessage}`, { id: toastId })
+    } catch (error) {
+      console.error('bulk PDF export failed', error)
+      setExportError('一括PDF出力に失敗しました。')
+      toast.error('一括PDF出力に失敗しました')
+    } finally {
+      setExportRunOverride(null)
+      setPhotoDetailExportData([])
+      setIsExporting(false)
+    }
+  }, [contractors, issues, runPdfExport])
 
   const handleExportPdf = useCallback(async () => {
     console.log('PDF export clicked')
@@ -435,93 +639,12 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         exportTarget: selectedExportTarget,
         selectedFloor,
       })
-      console.log('PDF export filtered issues', filteredIssues)
-      console.log('PDF export target drawings', targetDrawings)
 
-      const { commonIssues: commonForExport, photoDetailIssues } = pdfExportSplit
-      const includeLists = includesListPages(exportContent)
-      const includeDrawing = includesDrawingPages(exportContent)
-      const includePhotoDetail = includeLists && photoDetailIssues.length > 0
-
-      if (includeLists && pdfExportSplit.selectedIssues.length === 0 && commonForExport.length === 0) {
+      const exported = await runPdfExport()
+      if (!exported) {
         throw new Error('出力対象の指摘がありません')
       }
-      if (includeDrawing && targetDrawings.length === 0) {
-        throw new Error('出力対象の図面がありません')
-      }
 
-      const selectedTableTarget = selectedTableExportRef.current
-      if (includeLists && !selectedTableTarget) {
-        throw new Error('指摘一覧表の出力対象が見つかりません')
-      }
-
-      let photoDetailIssuesWithUrls: PhotoDetailIssue[] = []
-      if (includePhotoDetail && photoDetailIssues.length > 0) {
-        const signedUrls = await createPhotoSignedUrlsForExport(photoDetailIssues)
-        photoDetailIssuesWithUrls = mergePhotoSignedUrls(photoDetailIssues, signedUrls)
-        setPhotoDetailExportData(photoDetailIssuesWithUrls)
-      } else {
-        setPhotoDetailExportData([])
-      }
-
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      })
-
-      const selectedTableImage =
-        includeLists && selectedTableTarget ? await captureElement(selectedTableTarget) : null
-
-      let commonTableImage: string | null = null
-      if (includeLists && commonForExport.length > 0) {
-        const commonTableTarget = commonTableExportRef.current
-        if (!commonTableTarget) {
-          throw new Error('共通指摘一覧表の出力対象が見つかりません')
-        }
-        commonTableImage = await captureElement(commonTableTarget)
-      }
-
-      const drawingImageDataList: string[] = []
-      if (includeDrawing) {
-        for (let index = 0; index < targetDrawings.length; index += 1) {
-          const drawing = targetDrawings[index]
-          const drawingIssues = getDrawingIssues(drawing.id)
-          console.log('PDF export drawing issues', drawing.id, drawingIssues)
-
-          const drawingTarget = drawingExportRefs.current[index]
-          if (!drawingTarget) {
-            throw new Error(`図面の出力対象が見つかりません（${drawing.floor_label}）`)
-          }
-          await waitForExportReady(drawingTarget)
-          await waitForElementImages(drawingTarget)
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-          })
-          drawingImageDataList.push(await captureElement(drawingTarget))
-        }
-      }
-
-      const photoDetailImages: string[] = []
-      if (includePhotoDetail) {
-        for (let index = 0; index < photoDetailIssuesWithUrls.length; index += 1) {
-          const target = photoDetailExportRefs.current[index]
-          if (!target) continue
-          await waitForElementImages(target)
-          photoDetailImages.push(await captureElement(target))
-        }
-      }
-
-      const { blob, filename } = await buildInspectionReportPdf({
-        selectedTableImage,
-        commonTableImage,
-        drawingImageDataList,
-        photoDetailImages,
-        includeLists,
-        includeDrawing,
-        includePhotoDetail,
-        hasCommonPage: includeLists && commonForExport.length > 0,
-      })
-
-      downloadPdfBlob(blob, filename)
       console.log('PDF export completed')
       toast.success(`${pdfExportSplit.exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
@@ -534,14 +657,21 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
     }
   }, [
     exportContent,
-    filteredIssues,
-    getDrawingIssues,
-    pdfExportSplit,
+    pdfExportSplit.exportContractorLabel,
+    runPdfExport,
     selectedContractorId,
     selectedExportTarget,
     selectedFloor,
-    targetDrawings,
   ])
+
+  useEffect(() => {
+    if (loading || bulkExportStartedRef.current) return
+    if (searchParams.get('bulk') !== '1') return
+    if (contractors.length === 0) return
+
+    bulkExportStartedRef.current = true
+    void handleBulkExport()
+  }, [loading, contractors.length, handleBulkExport, searchParams])
 
   const backHref = projectId
     ? urlDrawingId
@@ -626,7 +756,8 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
               <Button
                 variant="outline"
                 className="h-10 gap-2 bg-white px-3 md:h-11 md:px-4"
-                onClick={handleBulkExport}
+                disabled={isExporting || contractors.length === 0}
+                onClick={() => void handleBulkExport()}
               >
                 <Printer className="h-4 w-4" />
                 <span className="hidden sm:inline">全業者一括出力</span>
