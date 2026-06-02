@@ -206,7 +206,7 @@ export default function ProjectDetailPage() {
   }
 
   const handleDownload = () => {
-    window.open('/api/pdf')
+    router.push(`/projects/${projectId}/export`)
   }
 
   if (!project) {
@@ -396,7 +396,7 @@ export default function ProjectDetailPage() {
             }
             onToggleFloor={onToggleFloor}
             onPreview={() => {
-              toast.success('PDFプレビューを更新しました')
+              router.push(`/projects/${projectId}/export`)
             }}
             onExport={handleDownload}
           />

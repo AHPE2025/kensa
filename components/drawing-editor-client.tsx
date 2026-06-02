@@ -35,6 +35,8 @@ import {
   buildInspectionReportPdf,
   captureElement,
   downloadPdfBlob,
+  includesDrawingPages,
+  includesListPages,
   splitIssuesForPdfExport,
   waitForElementImages,
   type PdfExportCondition,
@@ -147,7 +149,9 @@ export default function DrawingEditorClient() {
   })
   const [exportTarget, setExportTarget] = useState<'all' | 'unassigned' | 'contractor'>('all')
   const [exportContractorId, setExportContractorId] = useState<string>('all')
-  const [exportContentType, setExportContentType] = useState<'list' | 'drawing_and_list'>('drawing_and_list')
+  const [exportContentType, setExportContentType] = useState<
+    'list_only' | 'list_and_drawing' | 'drawing_only'
+  >('list_and_drawing')
   const [isExporting, setIsExporting] = useState(false)
   const [project, setProject] = useState<Project | null>(null)
   const [profileTenantId, setProfileTenantId] = useState<string | null>(null)
@@ -549,7 +553,7 @@ export default function DrawingEditorClient() {
 
       const drawingTarget = drawingExportRef.current
       console.log('pdf export target:', drawingTarget)
-      if (exportContentType === 'drawing_and_list' && !drawingTarget) {
+      if (includesDrawingPages(exportContentType) && !drawingTarget) {
         throw new Error('PDF出力対象が見つかりません')
       }
 
@@ -584,7 +588,7 @@ export default function DrawingEditorClient() {
       }
 
       let drawingImageData: string | null = null
-      if (exportContentType === 'drawing_and_list' && drawingTarget) {
+      if (includesDrawingPages(exportContentType) && drawingTarget) {
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
         })
@@ -616,8 +620,8 @@ export default function DrawingEditorClient() {
         commonTableImage,
         drawingImageData,
         photoDetailImages,
-        includeLists: true,
-        includeDrawing: exportContentType === 'drawing_and_list',
+        includeLists: includesListPages(exportContentType),
+        includeDrawing: includesDrawingPages(exportContentType),
         includePhotoDetail: photoDetailImages.length > 0,
         hasCommonPage: commonIssues.length > 0,
       })
@@ -628,7 +632,7 @@ export default function DrawingEditorClient() {
     } catch (error) {
       console.error('pdf common issue handling error:', error)
       console.error('pdf export error:', error)
-      setExportError('PDF出力に失敗しました')
+      setExportError('PDF出力に失敗しました。図面データまたは指摘データを確認してください。')
       toast.error('PDF出力に失敗しました')
     } finally {
       setPhotoExportIssues([])
@@ -1226,11 +1230,13 @@ export default function DrawingEditorClient() {
                         <p className="text-xs font-medium">出力内容</p>
                         <Tabs
                           value={exportContentType}
-                          onValueChange={(v) => setExportContentType(v as typeof exportContentType)}
+                          onValueChange={(v) =>
+                            setExportContentType(v as typeof exportContentType)
+                          }
                         >
                           <TabsList className="grid w-full grid-cols-2">
-                            <TabsTrigger value="list">指摘一覧のみ</TabsTrigger>
-                            <TabsTrigger value="drawing_and_list">図面＋指摘一覧</TabsTrigger>
+                            <TabsTrigger value="list_only">指摘一覧のみ</TabsTrigger>
+                            <TabsTrigger value="list_and_drawing">一覧＋図面</TabsTrigger>
                           </TabsList>
                         </Tabs>
                       </div>

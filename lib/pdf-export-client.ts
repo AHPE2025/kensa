@@ -2,10 +2,34 @@ import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { Contractor, Issue } from '@/lib/domain'
 
+export type PdfExportContentType = 'list_and_drawing' | 'drawing_only' | 'list_only'
+
+/** @deprecated Use PdfExportContentType */
+export type LegacyPdfExportContentType = 'list' | 'drawing_and_list'
+
 export type PdfExportCondition = {
   exportTarget: 'all' | 'unassigned' | 'contractor' | 'common'
   exportContractorId: string
-  exportContentType: 'list' | 'drawing_and_list'
+  exportContentType: PdfExportContentType | LegacyPdfExportContentType
+}
+
+export function normalizeExportContentType(
+  value: PdfExportContentType | LegacyPdfExportContentType | string | null | undefined,
+): PdfExportContentType {
+  if (value === 'drawing_only' || value === 'drawing-only') return 'drawing_only'
+  if (value === 'list_only' || value === 'list') return 'list_only'
+  if (value === 'list_and_drawing' || value === 'list-and-drawing' || value === 'drawing_and_list') {
+    return 'list_and_drawing'
+  }
+  return 'list_and_drawing'
+}
+
+export function includesListPages(contentType: PdfExportContentType): boolean {
+  return contentType === 'list_and_drawing' || contentType === 'list_only'
+}
+
+export function includesDrawingPages(contentType: PdfExportContentType): boolean {
+  return contentType === 'list_and_drawing' || contentType === 'drawing_only'
 }
 
 export type PdfExportMeta = {
@@ -136,6 +160,28 @@ export function filterIssuesForExport(
   return splitIssuesForPdfExport(issues, condition, []).drawingIssues
 }
 
+export async function waitForExportReady(element: HTMLElement, timeoutMs = 15000): Promise<void> {
+  if (element.dataset.exportReady === 'true') return
+  await new Promise<void>((resolve) => {
+    const done = () => resolve()
+    const observer = new MutationObserver(() => {
+      if (element.dataset.exportReady === 'true') {
+        observer.disconnect()
+        done()
+      }
+    })
+    observer.observe(element, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['data-export-ready'],
+    })
+    setTimeout(() => {
+      observer.disconnect()
+      done()
+    }, timeoutMs)
+  })
+}
+
 export async function waitForElementImages(element: HTMLElement, timeoutMs = 15000): Promise<void> {
   const images = Array.from(element.querySelectorAll('img'))
   await Promise.all(
@@ -165,6 +211,10 @@ export async function captureElement(element: HTMLElement): Promise<string> {
     useCORS: true,
     backgroundColor: '#ffffff',
     logging: false,
+    windowWidth: element.scrollWidth,
+    windowHeight: element.scrollHeight,
+    scrollX: 0,
+    scrollY: 0,
     onclone: (_clonedDoc, clonedElement) => {
       const sourceCanvases = element.querySelectorAll('canvas')
       const clonedCanvases = clonedElement.querySelectorAll('canvas')
@@ -228,6 +278,7 @@ export async function buildInspectionReportPdf(options: {
   selectedTableImage?: string | null
   commonTableImage?: string | null
   drawingImageData?: string | null
+  drawingImageDataList?: string[]
   photoDetailImages?: string[]
   includeLists: boolean
   includeDrawing: boolean
@@ -235,36 +286,43 @@ export async function buildInspectionReportPdf(options: {
   hasCommonPage: boolean
 }): Promise<{ blob: Blob; filename: string }> {
   const pdf = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
     format: 'a4',
   })
 
   let pageCount = 0
+  const pageOrientation: 'landscape' | 'portrait' = 'portrait'
 
   if (options.includeLists && options.selectedTableImage) {
-    await addCapturedPage(pdf, options.selectedTableImage, pageCount === 0, 'landscape')
+    await addCapturedPage(pdf, options.selectedTableImage, pageCount === 0, pageOrientation)
     pageCount += 1
   }
 
   if (options.includeLists && options.hasCommonPage && options.commonTableImage) {
-    await addCapturedPage(pdf, options.commonTableImage, pageCount === 0, 'landscape')
+    await addCapturedPage(pdf, options.commonTableImage, pageCount === 0, pageOrientation)
     pageCount += 1
   }
 
-  if (options.includeDrawing && options.drawingImageData) {
-    await addCapturedPage(pdf, options.drawingImageData, pageCount === 0, 'landscape')
-    pageCount += 1
-  }
-
-  if (options.includePhotoDetail && options.photoDetailImages) {
-    for (const imageData of options.photoDetailImages) {
-      await addCapturedPage(pdf, imageData, pageCount === 0, 'portrait')
+  const drawingImages = [
+    ...(options.drawingImageDataList ?? []),
+    ...(options.drawingImageData ? [options.drawingImageData] : []),
+  ]
+  if (options.includeDrawing) {
+    for (const imageData of drawingImages) {
+      await addCapturedPage(pdf, imageData, pageCount === 0, pageOrientation)
       pageCount += 1
     }
   }
 
-  const filename = `inspection_photo_report_${formatExportTimestamp(new Date())}.pdf`
+  if (options.includePhotoDetail && options.photoDetailImages) {
+    for (const imageData of options.photoDetailImages) {
+      await addCapturedPage(pdf, imageData, pageCount === 0, pageOrientation)
+      pageCount += 1
+    }
+  }
+
+  const filename = `inspection_report_${formatExportTimestamp(new Date())}.pdf`
   return { blob: pdf.output('blob'), filename }
 }
 
