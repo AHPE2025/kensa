@@ -11,7 +11,7 @@ const PdfExportPage = dynamic(
 function PdfExportPageFallback() {
   return (
     <div className="flex h-screen items-center justify-center bg-background">
-      <p className="text-sm text-muted-foreground">PDF出力ページを読み込み中...</p>
+      <p className="text-sm text-muted-foreground">PDF出力確認ページを読み込み中...</p>
     </div>
   )
 }

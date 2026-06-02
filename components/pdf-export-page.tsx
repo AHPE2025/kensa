@@ -890,7 +890,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
               </Button>
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 md:text-xl">PDF出力</h1>
+              <h1 className="text-lg font-bold text-slate-900 md:text-xl">PDF出力確認</h1>
               <p className="mt-1 text-sm text-slate-600">{project.name}</p>
             </div>
           </div>
@@ -1093,9 +1093,9 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         <main className="min-h-0 flex-1 overflow-auto p-4 md:p-6 lg:p-8">
           <div className="space-y-4">
             <div>
-              <h2 className="text-base font-semibold text-slate-900 md:text-lg">PDFプレビュー</h2>
+              <h2 className="text-base font-semibold text-slate-900 md:text-lg">出力プレビュー</h2>
               <p className="mt-1 text-sm text-slate-600">
-                この内容でPDF出力されます。業者・階を変更するとプレビューが更新されます。
+                出力条件に合致する一覧表・図面を確認できます。問題なければ右上の「PDFをダウンロード」から出力してください。
               </p>
             </div>
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Download, Filter, MapPin, Trash2 } from 'lucide-react'
+import { Filter, MapPin, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -480,7 +480,12 @@ export default function DrawingEditorClient() {
   }, [exportTarget])
 
   const handleGoToExportPreview = useCallback(() => {
-    if (!projectId) return
+    console.log('Go to export preview clicked')
+
+    if (!projectId) {
+      setExportError('案件IDが取得できません')
+      return
+    }
 
     if (exportTarget === 'contractor' && (exportContractorId === 'all' || !exportContractorId)) {
       setExportError('出力する業者を選択してください')
@@ -497,7 +502,9 @@ export default function DrawingEditorClient() {
       drawingId,
     })
 
-    router.push(`/projects/${projectId}/export?${params.toString()}`)
+    const href = `/projects/${projectId}/inspection-export?${params.toString()}`
+    console.log('Go to export preview:', href)
+    router.push(href)
   }, [drawingId, exportContentType, exportContractorId, exportTarget, projectId, router])
 
   const getIssueContractorId = useCallback((issue: Issue) => issue.contractor_id ?? UNASSIGNED_CONTRACTOR_KEY, [])
@@ -1219,14 +1226,6 @@ export default function DrawingEditorClient() {
             >
               <Filter className="mr-2 h-5 w-5" />
               業者フィルタ
-            </Button>
-            <Button
-              type="button"
-              className="h-12 bg-blue-600 hover:bg-blue-700"
-              onClick={handleGoToExportPreview}
-            >
-              <Download className="mr-2 h-5 w-5" />
-              出力内容を確認する
             </Button>
             <Button
               variant="destructive"
