@@ -41,6 +41,7 @@ import {
   waitForElementImages,
   type PdfExportCondition,
 } from '@/lib/pdf-export-client'
+import { canvasToDataUrl, renderDrawingToCanvas } from '@/lib/drawing-render-export'
 import { createPhotoSignedUrlsForExport, mergePhotoSignedUrls } from '@/lib/issue-photos-client'
 import { PdfExportIssueTable } from '@/components/pdf-export-issue-table'
 import { PdfExportPhotoDetailPage } from '@/components/pdf-export-photo-detail'
@@ -514,7 +515,22 @@ export default function DrawingEditorClient() {
     sortedDrawings,
   ])
 
+  const loadDrawingPdfUrl = useCallback(async (targetDrawingId: string): Promise<string | null> => {
+    const issueRes = await authedFetch(`/api/drawings/${targetDrawingId}/issues`)
+    const issueData = (await issueRes.json()) as {
+      drawing?: Drawing & { signed_url?: string | null }
+      error?: string
+    }
+    if (!issueRes.ok) {
+      console.error('drawing pdf url load error:', issueData.error ?? targetDrawingId)
+      return null
+    }
+    return issueData.drawing?.signed_url ?? null
+  }, [])
+
   const handlePdfExport = useCallback(async () => {
+    console.log('PDF export clicked')
+
     try {
       setIsExporting(true)
       setExportError(null)
@@ -531,30 +547,23 @@ export default function DrawingEditorClient() {
         exportContractorLabel,
       } = pdfExportSplit
 
-      console.log('pdf selected contractor:', selectedContractor)
-      console.log('pdf selected floor:', 'all')
-      console.log('pdf selected issues:', pdfExportSplit.selectedIssues)
-      console.log('pdf common issues:', commonIssues)
-      console.log('pdf drawing issues:', drawingIssues)
-      console.log('pdf common issue count:', commonIssues.length)
-
-      console.log('pdf export with common issues:', {
-        selectedContractor: exportContractorLabel,
-        selectedFloor: 'all',
-        selectedIssues: pdfExportSplit.selectedIssues,
-        commonIssues,
-        drawingIssues,
+      console.log('PDF export condition', {
+        exportContentType,
+        exportTarget,
+        exportContractorId,
       })
+      console.log('filteredIssues', [...pdfExportSplit.selectedIssues, ...commonIssues])
+      console.log('targetDrawings', currentDrawing ? [currentDrawing] : [])
+      console.log('pdf selected contractor:', selectedContractor)
+      console.log('pdf drawing issues:', drawingIssues)
 
       const selectedTableTarget = selectedTableExportRef.current
-      if (!selectedTableTarget) {
+      if (includesListPages(exportContentType) && !selectedTableTarget) {
         throw new Error('指摘一覧表の出力対象が見つかりません')
       }
 
-      const drawingTarget = drawingExportRef.current
-      console.log('pdf export target:', drawingTarget)
-      if (includesDrawingPages(exportContentType) && !drawingTarget) {
-        throw new Error('PDF出力対象が見つかりません')
+      if (includesDrawingPages(exportContentType) && !currentDrawing) {
+        throw new Error('図面データがありません')
       }
 
       console.log('pdf export start')
@@ -576,10 +585,13 @@ export default function DrawingEditorClient() {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       })
 
-      const selectedTableImage = await captureElement(selectedTableTarget)
+      const selectedTableImage =
+        includesListPages(exportContentType) && selectedTableTarget && pdfExportSplit.selectedIssues.length > 0
+          ? await captureElement(selectedTableTarget)
+          : null
 
       let commonTableImage: string | null = null
-      if (commonIssues.length > 0) {
+      if (includesListPages(exportContentType) && commonIssues.length > 0) {
         const commonTableTarget = commonTableExportRef.current
         if (!commonTableTarget) {
           throw new Error('共通指摘一覧表の出力対象が見つかりません')
@@ -588,11 +600,25 @@ export default function DrawingEditorClient() {
       }
 
       let drawingImageData: string | null = null
-      if (includesDrawingPages(exportContentType) && drawingTarget) {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        })
-        drawingImageData = await captureElement(drawingTarget)
+      if (includesDrawingPages(exportContentType) && currentDrawing) {
+        const issuesForDrawing = drawingIssues.filter((issue) => issue.drawing_id === currentDrawing.id)
+        try {
+          const canvas = await renderDrawingToCanvas(
+            {
+              ...currentDrawing,
+              pdf_signed_url: currentDrawing.signed_url,
+            },
+            issuesForDrawing,
+            {
+              pageIndex: pageIndex ?? 0,
+              resolvePdfUrl: loadDrawingPdfUrl,
+            },
+          )
+          drawingImageData = canvasToDataUrl(canvas)
+        } catch (error) {
+          console.error('Drawing render failed', { drawingId: currentDrawing.id, error })
+          throw error
+        }
       }
 
       let photoDetailImages: string[] = []
@@ -615,34 +641,40 @@ export default function DrawingEditorClient() {
         }
       }
 
+      const hasExportableList =
+        pdfExportSplit.selectedIssues.length > 0 || commonIssues.length > 0
+
       const { blob, filename } = await buildInspectionReportPdf({
         selectedTableImage,
         commonTableImage,
         drawingImageData,
         photoDetailImages,
-        includeLists: includesListPages(exportContentType),
+        includeLists: includesListPages(exportContentType) && hasExportableList,
         includeDrawing: includesDrawingPages(exportContentType),
         includePhotoDetail: photoDetailImages.length > 0,
         hasCommonPage: commonIssues.length > 0,
+        filenameLabel: exportContractorLabel,
       })
 
       downloadPdfBlob(blob, filename)
-      console.log('pdf export done')
+      console.log('PDF export completed')
       toast.success(`${exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
-      console.error('pdf common issue handling error:', error)
-      console.error('pdf export error:', error)
-      setExportError('PDF出力に失敗しました。図面データまたは指摘データを確認してください。')
+      console.error('PDF export failed', error)
+      setExportError('PDF出力に失敗しました。図面データまたは描画処理を確認してください。')
       toast.error('PDF出力に失敗しました')
     } finally {
       setPhotoExportIssues([])
       setIsExporting(false)
     }
   }, [
+    currentDrawing,
     exportCondition,
     exportContentType,
     exportContractorId,
     exportTarget,
+    loadDrawingPdfUrl,
+    pageIndex,
     pdfExportSplit,
     project?.address,
     project?.name,

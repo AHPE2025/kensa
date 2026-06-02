@@ -35,7 +35,6 @@ import {
   getTargetDrawings,
 } from '@/lib/pdf-export-filters'
 import {
-  buildInspectionReportPdf,
   captureElement,
   delay,
   downloadPdfBlob,
@@ -46,15 +45,15 @@ import {
   normalizeExportContentType,
   waitForDomUpdate,
   waitForElementImages,
-  waitForExportReady,
   type PdfExportCondition,
   type PdfExportContentType,
   type PdfExportSplit,
 } from '@/lib/pdf-export-client'
+import { exportInspectionPdf } from '@/lib/inspection-pdf-export'
 import { InspectionListPreview } from '@/components/inspection-list-preview'
 import { PdfExportPhotoDetailPage, type PhotoDetailIssue } from '@/components/pdf-export-photo-detail'
 import { PdfExportPhotoPreviewSection } from '@/components/pdf-export-photo-preview'
-import { DrawingExportCapture, PdfExportPreview } from '@/components/pdf-export-preview'
+import { PdfExportPreview } from '@/components/pdf-export-preview'
 import { useAuthStore } from '@/lib/stores/auth-store'
 import { toast } from 'sonner'
 
@@ -166,7 +165,6 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
   const selectedTableExportRef = useRef<HTMLDivElement | null>(null)
   const commonTableExportRef = useRef<HTMLDivElement | null>(null)
-  const drawingExportRefs = useRef<(HTMLDivElement | null)[]>([])
   const photoDetailExportRefs = useRef<(HTMLDivElement | null)[]>([])
   const pdfExportSplitRef = useRef<PdfExportSplit | null>(null)
   const targetDrawingsRef = useRef<DrawingRow[]>([])
@@ -443,79 +441,21 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       const drawingsForExport = targetDrawingsRef.current
       if (!split) return false
 
-      const { commonIssues: commonForExport, photoDetailIssues, selectedIssues, exportContractorLabel } =
-        split
-      const includeLists = includesListPages(exportContent)
-      const includeDrawing = includesDrawingPages(exportContent)
-      const includePhotoDetail = includeLists && photoDetailIssues.length > 0
-      const filenameLabel = options?.filenameLabel ?? exportContractorLabel
-
-      if (
-        options?.skipEmpty &&
-        includeLists &&
-        selectedIssues.length === 0 &&
-        commonForExport.length === 0
-      ) {
-        return false
-      }
-      if (options?.skipEmpty && includeDrawing && drawingsForExport.length === 0 && !includeLists) {
-        return false
-      }
-
-      if (includeLists && selectedIssues.length === 0 && commonForExport.length === 0 && !includeDrawing) {
-        throw new Error('出力対象の指摘がありません')
-      }
-      if (includeDrawing && drawingsForExport.length === 0 && !includeLists) {
-        throw new Error('出力対象の図面がありません')
-      }
-
-      const selectedTableTarget = selectedTableExportRef.current
-      if (includeLists && selectedIssues.length + commonForExport.length > 0 && !selectedTableTarget) {
-        throw new Error('指摘一覧表の出力対象が見つかりません')
-      }
+      const { photoDetailIssues } = split
+      const includePhotoDetail = includesListPages(exportContent) && photoDetailIssues.length > 0
 
       let photoDetailIssuesWithUrls: PhotoDetailIssue[] = []
-      if (includePhotoDetail && photoDetailIssues.length > 0) {
+      if (includePhotoDetail) {
         const signedUrls = await createPhotoSignedUrlsForExport(photoDetailIssues)
         photoDetailIssuesWithUrls = mergePhotoSignedUrls(photoDetailIssues, signedUrls)
         setPhotoDetailExportData(photoDetailIssuesWithUrls)
+        await waitForDomUpdate()
       } else {
         setPhotoDetailExportData([])
       }
 
-      await waitForDomUpdate()
-
-      const selectedTableImage =
-        includeLists && selectedTableTarget && selectedIssues.length > 0
-          ? await captureElement(selectedTableTarget)
-          : null
-
-      let commonTableImage: string | null = null
-      if (includeLists && commonForExport.length > 0) {
-        const commonTableTarget = commonTableExportRef.current
-        if (!commonTableTarget) {
-          throw new Error('共通指摘一覧表の出力対象が見つかりません')
-        }
-        commonTableImage = await captureElement(commonTableTarget)
-      }
-
-      const drawingImageDataList: string[] = []
-      if (includeDrawing) {
-        for (let index = 0; index < drawingsForExport.length; index += 1) {
-          const drawing = drawingsForExport[index]
-          const drawingTarget = drawingExportRefs.current[index]
-          if (!drawingTarget) {
-            throw new Error(`図面の出力対象が見つかりません（${drawing.floor_label}）`)
-          }
-          await waitForExportReady(drawingTarget)
-          await waitForElementImages(drawingTarget)
-          await waitForDomUpdate()
-          drawingImageDataList.push(await captureElement(drawingTarget))
-        }
-      }
-
       const photoDetailImages: string[] = []
-      if (includePhotoDetail) {
+      if (includePhotoDetail && photoDetailIssuesWithUrls.length > 0) {
         await waitForDomUpdate()
         for (let index = 0; index < photoDetailIssuesWithUrls.length; index += 1) {
           const target = photoDetailExportRefs.current[index]
@@ -525,28 +465,28 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         }
       }
 
-      const hasExportableList = selectedIssues.length > 0 || commonForExport.length > 0
-      const hasExportableContent = hasExportableList || drawingImageDataList.length > 0
-      if (options?.skipEmpty && !hasExportableContent) {
+      const result = await exportInspectionPdf({
+        exportContent,
+        split,
+        targetDrawings: drawingsForExport,
+        getDrawingIssues,
+        resolveDrawingPdfUrl: loadDrawingPdfUrl,
+        getSelectedTableElement: () => selectedTableExportRef.current,
+        getCommonTableElement: () => commonTableExportRef.current,
+        photoDetailImages,
+        includePhotoDetail,
+        filenameLabel: options?.filenameLabel,
+        skipEmpty: options?.skipEmpty,
+      })
+
+      if (!result.exported || !result.blob || !result.filename) {
         return false
       }
 
-      const { blob, filename } = await buildInspectionReportPdf({
-        selectedTableImage,
-        commonTableImage,
-        drawingImageDataList,
-        photoDetailImages,
-        includeLists: includeLists && hasExportableList,
-        includeDrawing,
-        includePhotoDetail,
-        hasCommonPage: includeLists && commonForExport.length > 0,
-        filenameLabel,
-      })
-
-      downloadPdfBlob(blob, filename)
+      downloadPdfBlob(result.blob, result.filename)
       return true
     },
-    [exportContent],
+    [exportContent, getDrawingIssues, loadDrawingPdfUrl],
   )
 
   const handleBulkExport = useCallback(async () => {
@@ -573,7 +513,6 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
         const target = targets[index]
         toast.loading(`PDF出力中... (${index + 1}/${targets.length}) ${target.label}`, { id: toastId })
 
-        drawingExportRefs.current = []
         photoDetailExportRefs.current = []
         setExportRunOverride({
           exportTarget: target.exportTarget,
@@ -649,7 +588,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
       toast.success(`${pdfExportSplit.exportContractorLabel}のPDFを出力しました`)
     } catch (error) {
       console.error('PDF export failed', error)
-      setExportError('PDF出力に失敗しました。図面データまたは指摘データを確認してください。')
+      setExportError('PDF出力に失敗しました。図面データまたは描画処理を確認してください。')
       toast.error('PDF出力に失敗しました')
     } finally {
       setPhotoDetailExportData([])
@@ -864,19 +803,21 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                   <div className="space-y-2">
                     <Label className="text-sm font-medium">出力内容</Label>
                     <RadioGroup
-                      value={exportContent}
-                      onValueChange={(value) => setExportContent(value as ExportContentMode)}
+                      value={exportContent === 'list_only' ? 'list_only' : 'drawing_and_list'}
+                      onValueChange={(value) =>
+                        setExportContent(normalizeExportContentType(value) as ExportContentMode)
+                      }
                     >
                       <div className="flex items-center gap-2">
-                        <RadioGroupItem value="list_and_drawing" id="pdf-list-and-drawing" />
-                        <Label htmlFor="pdf-list-and-drawing" className="text-sm">
-                          一覧＋図面
+                        <RadioGroupItem value="list_only" id="pdf-list-only" />
+                        <Label htmlFor="pdf-list-only" className="text-sm">
+                          指摘一覧のみ
                         </Label>
                       </div>
                       <div className="flex items-center gap-2">
-                        <RadioGroupItem value="drawing_only" id="pdf-drawing-only" />
-                        <Label htmlFor="pdf-drawing-only" className="text-sm">
-                          図面のみ
+                        <RadioGroupItem value="drawing_and_list" id="pdf-drawing-and-list" />
+                        <Label htmlFor="pdf-drawing-and-list" className="text-sm">
+                          図面＋指摘一覧
                         </Label>
                       </div>
                     </RadioGroup>
@@ -1017,19 +958,6 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
             />
           </div>
         ) : null}
-        {showDrawingPreview
-          ? targetDrawings.map((drawing, index) => (
-              <DrawingExportCapture
-                key={drawing.id}
-                exportRef={(element) => {
-                  drawingExportRefs.current[index] = element
-                }}
-                drawing={drawing}
-                issues={getDrawingIssues(drawing.id)}
-                contractors={contractors}
-              />
-            ))
-          : null}
         {(photoDetailExportData.length > 0 ? photoDetailExportData : []).map((issue, index) => (
           <div
             key={issue.id}

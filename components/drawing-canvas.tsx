@@ -6,7 +6,7 @@ import type { Issue } from '@/lib/domain'
 import type { EditorMode } from '@/lib/stores/editor-store'
 import { IssuePinsStage } from '@/components/issue-pins-stage'
 
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 
 type NumberedIssue = Issue & { no: number }
 
@@ -54,6 +54,8 @@ const PdfLayer = memo(function PdfLayer({
         pageNumber={Math.min(pageIndex + 1, totalPages)}
         width={renderWidth}
         rotate={rotation}
+        renderTextLayer={false}
+        renderAnnotationLayer={false}
         onLoadSuccess={handlePageLoadSuccess}
       />
     </Document>

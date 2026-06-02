@@ -7,7 +7,7 @@ import type { Contractor, Drawing, Issue } from '@/lib/domain'
 import type { ExportIssue } from '@/lib/pdf-export-client'
 import { IssuePinsStage } from '@/components/issue-pins-stage'
 
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 
 type DrawingPdfPreviewDrawing = Drawing & {
   signed_url?: string | null
@@ -168,6 +168,8 @@ export function DrawingPdfPreview({
                 pageNumber={Math.min(pageIndex + 1, pdfPageCount)}
                 width={renderWidth}
                 rotate={rotation}
+                renderTextLayer={false}
+                renderAnnotationLayer={false}
                 onLoadSuccess={(page) => {
                   const viewport = page.getViewport({ scale: 1 })
                   setPageSize({ width: viewport.width, height: viewport.height })
