@@ -121,6 +121,16 @@ function resolveInitialContractorId(
   return resolvedContractors[0]?.id ?? ''
 }
 
+function exportTargetLabel(target: ExportTargetMode): string {
+  if (target === 'all') return '全業者'
+  if (target === 'contractor') return '特定業者'
+  return '業者未定'
+}
+
+function exportContentLabel(content: ExportContentMode): string {
+  return content === 'list' ? '指摘一覧のみ' : '図面＋指摘一覧'
+}
+
 function countStatusStats(issues: Issue[]) {
   let open = 0
   let done = 0
@@ -147,9 +157,12 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
 
   const projectId = projectIdProp ?? params.id
   const urlDrawingId = searchParams.get('drawingId')
-  const urlExportTarget = searchParams.get('target')
-  const urlExportContractorId = searchParams.get('contractorId')
-  const urlExportContentType = searchParams.get('contentType')
+  const urlExportTarget =
+    searchParams.get('exportTarget') ?? searchParams.get('target')
+  const urlExportContractorId =
+    searchParams.get('exportContractorId') ?? searchParams.get('contractorId')
+  const urlExportContentType =
+    searchParams.get('exportContentType') ?? searchParams.get('contentType')
 
   const [project, setProject] = useState<Project | null>(null)
   const [drawings, setDrawings] = useState<DrawingRow[]>([])
@@ -456,12 +469,28 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   }, [issues, sortedDrawings])
 
   useEffect(() => {
-    console.log('pdf export condition:', {
+    if (loading || !project) return
+
+    console.log('Export preview page loaded')
+    console.log('Export preview condition', {
+      projectId,
+      exportTarget: effectiveExportTarget,
+      exportContractorId:
+        effectiveExportTarget === 'contractor' ? effectiveContractorId || 'all' : 'all',
       exportContentType: exportContent,
-      exportContractorId: selectedExportTarget === 'contractor' ? selectedContractorId : 'all',
-      exportTarget: selectedExportTarget,
     })
-  }, [exportContent, selectedContractorId, selectedExportTarget])
+    console.log('Export preview filtered issues', filteredIssues)
+    console.log('Export preview target drawings', targetDrawings)
+  }, [
+    effectiveContractorId,
+    effectiveExportTarget,
+    exportContent,
+    filteredIssues,
+    loading,
+    project,
+    projectId,
+    targetDrawings,
+  ])
 
   useEffect(() => {
     if (photoDetailIssuesForPreview.length === 0) {
@@ -681,7 +710,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
   ])
 
   const handleExportPdf = useCallback(async () => {
-    console.log('PDF export clicked')
+    console.log('PDF download clicked')
 
     try {
       setIsExporting(true)
@@ -861,14 +890,8 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
               </Button>
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 md:text-xl">検査表PDF出力</h1>
-              <p className="mt-1 text-sm text-slate-600">
-                {project.name}
-                <span className="mx-2 text-slate-300">|</span>
-                検査日：{inspectionDateLabel}
-                <span className="mx-2 text-slate-300">|</span>
-                対象階：{selectedFloorLabel}
-              </p>
+              <h1 className="text-lg font-bold text-slate-900 md:text-xl">PDF出力</h1>
+              <p className="mt-1 text-sm text-slate-600">{project.name}</p>
             </div>
           </div>
 
@@ -893,7 +916,7 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                 onClick={handleExportPdf}
               >
                 <Download className="h-4 w-4" />
-                {isExporting ? 'PDF生成中...' : 'PDF出力'}
+                {isExporting ? 'PDF生成中...' : 'PDFをダウンロード'}
               </Button>
             </div>
           </div>
@@ -1009,30 +1032,30 @@ export function PdfExportPage({ projectId: projectIdProp }: PdfExportPageProps =
                   {exportError ? (
                     <p className="text-red-600 text-sm mt-2">{exportError}</p>
                   ) : null}
-
-                  <Button
-                    type="button"
-                    className="h-11 w-full bg-blue-600 hover:bg-blue-700"
-                    disabled={isExporting}
-                    onClick={handleExportPdf}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    {isExporting ? 'PDF生成中...' : 'PDF出力'}
-                  </Button>
                 </CardContent>
               </Card>
 
               <Card className="border-slate-200 shadow-sm">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-semibold">対象情報</CardTitle>
+                  <CardTitle className="text-sm font-semibold">出力条件</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <dl className="space-y-3 text-sm">
+                    <div>
+                      <dt className="text-slate-500">出力対象</dt>
+                      <dd className="font-medium text-slate-900">
+                        {exportTargetLabel(effectiveExportTarget)}
+                      </dd>
+                    </div>
                     <div>
                       <dt className="text-slate-500">対象業者</dt>
                       <dd className="font-medium text-slate-900">
                         {hasContractors ? pdfExportSplit.exportContractorLabel : '—'}
                       </dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">出力内容</dt>
+                      <dd className="font-medium text-slate-900">{exportContentLabel(exportContent)}</dd>
                     </div>
                     <div>
                       <dt className="text-slate-500">対象階</dt>
